@@ -6,8 +6,15 @@ jest.mock("../../prisma", () => ({
 }));
 
 import { Response } from "express";
+import * as jwt from "jsonwebtoken";
 import prisma from "../../prisma";
+import { getJwtSecret } from "../../config";
 import { authMiddleware, generateToken, AuthRequest } from "../../middleware/auth";
+import {
+  JWT_ALGORITHM,
+  JWT_AUDIENCE,
+  JWT_ISSUER,
+} from "../../lib/tokens";
 
 const mockedPrisma = prisma as unknown as { user: { findUnique: jest.Mock } };
 
@@ -84,7 +91,11 @@ describe("authMiddleware (#270, #366)", () => {
 
     const error = await runMiddleware(req);
 
-    expect(error).toMatchObject({ statusCode: 401, message: "Cross-site request forgery blocked" });
+    expect(error).toMatchObject({
+      statusCode: 403,
+      code: "FORBIDDEN",
+      message: "Cross-site request forgery blocked",
+    });
   });
 
   it("allows cookie-based state-changing requests with valid origin (#366)", async () => {
@@ -134,5 +145,94 @@ describe("authMiddleware (#270, #366)", () => {
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("connection refused");
+  });
+
+  it("signs tokens with HS256 and service-scoped claims", () => {
+    const decoded = jwt.decode(generateToken(106, null), { complete: true });
+
+    expect(decoded?.header.alg).toBe("HS256");
+    expect(decoded?.payload).toMatchObject({
+      id: 106,
+      walletAddress: null,
+      iss: JWT_ISSUER,
+      aud: JWT_AUDIENCE,
+    });
+  });
+
+  it("rejects a token signed with alg none", async () => {
+    const token = jwt.sign({ id: 106, walletAddress: null }, "", { algorithm: "none" });
+
+    const error = await runMiddleware(fakeRequest(token));
+
+    expect(error).toMatchObject({ statusCode: 401, code: "UNAUTHORIZED" });
+    expect(mockedPrisma.user.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("rejects a token signed with a different algorithm", async () => {
+    const token = jwt.sign({ id: 106, walletAddress: null }, getJwtSecret(), {
+      algorithm: "HS512",
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
+      expiresIn: "7d",
+    });
+
+    const error = await runMiddleware(fakeRequest(token));
+
+    expect(error).toMatchObject({ statusCode: 401, code: "UNAUTHORIZED" });
+  });
+
+  it("rejects a token with the wrong issuer", async () => {
+    const token = jwt.sign({ id: 106, walletAddress: null }, getJwtSecret(), {
+      algorithm: JWT_ALGORITHM,
+      issuer: "another-service",
+      audience: JWT_AUDIENCE,
+      expiresIn: "7d",
+    });
+
+    const error = await runMiddleware(fakeRequest(token));
+
+    expect(error).toMatchObject({ statusCode: 401, code: "UNAUTHORIZED" });
+  });
+
+  it("rejects a token with the wrong audience", async () => {
+    const token = jwt.sign({ id: 106, walletAddress: null }, getJwtSecret(), {
+      algorithm: JWT_ALGORITHM,
+      issuer: JWT_ISSUER,
+      audience: "another-service",
+      expiresIn: "7d",
+    });
+
+    const error = await runMiddleware(fakeRequest(token));
+
+    expect(error).toMatchObject({ statusCode: 401, code: "UNAUTHORIZED" });
+  });
+
+  it.each([
+    ["missing id", { walletAddress: null }],
+    ["string id", { id: "106", walletAddress: null }],
+  ])("rejects a token with a %s", async (_label, payload) => {
+    const token = jwt.sign(payload, getJwtSecret(), {
+      algorithm: JWT_ALGORITHM,
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
+      expiresIn: "7d",
+    });
+
+    const error = await runMiddleware(fakeRequest(token));
+
+    expect(error).toMatchObject({ statusCode: 401, code: "UNAUTHORIZED" });
+    expect(mockedPrisma.user.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("still accepts a legacy token without issuer or audience for one release", async () => {
+    mockedPrisma.user.findUnique.mockResolvedValue({ deletedAt: null });
+    const token = jwt.sign({ id: 106, walletAddress: null }, getJwtSecret(), {
+      expiresIn: "7d",
+    });
+
+    const result = await runMiddleware(fakeRequest(token));
+
+    expect(result).toBeUndefined();
+    expect(Number((jwt.decode(token) as jwt.JwtPayload).id)).toBe(106);
   });
 });

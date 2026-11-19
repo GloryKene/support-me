@@ -4,7 +4,7 @@ import { authMiddleware, AuthRequest } from "../middleware/auth";
 import { asyncHandler } from "../middleware/asyncHandler";
 import { validate } from "../middleware/validate";
 import { createWithdrawalSchema, listWithdrawalsQuerySchema } from "../schemas/withdrawals";
-import { NotFoundError, UnauthorizedError } from "../errors/AppError";
+import { ForbiddenError, NotFoundError, UnauthorizedError } from "../errors/AppError";
 
 const router = Router();
 
@@ -53,7 +53,7 @@ router.post(
     // Withdrawals are self-reported by the account holder after a cash-out, so
     // only the owner may record one against their own history.
     if (creator.userId !== req.user.id) {
-      throw new UnauthorizedError("You can only record withdrawals for your own profile");
+      throw new ForbiddenError("You can only record withdrawals for your own profile");
     }
 
     // Idempotent on the anchor transaction id: the completion path can fire more

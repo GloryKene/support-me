@@ -168,6 +168,10 @@ model DonationIdempotencyKey {
   donation   Donation @relation(fields: [donationId], references: [id], onDelete: Cascade)
   expiresAt  DateTime
   createdAt  DateTime @default(now())
+  // SHA-256 of the canonical request fields (#391). Nullable because keys
+  // created before this change cannot be verified; a replay of one is treated
+  // as a mismatch rather than silently returning the original donation.
+  requestHash String?
 }
 
 model Withdrawal {

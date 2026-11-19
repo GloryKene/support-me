@@ -47,6 +47,12 @@ export class ConflictError extends AppError {
   }
 }
 
+export class UnprocessableEntityError extends AppError {
+  constructor(message: string) {
+    super(message, 422, "UNPROCESSABLE_ENTITY");
+  }
+}
+
 export class TooManyRequestsError extends AppError {
   constructor(message = "Too many requests, please try again later") {
     super(message, 429, "TOO_MANY_REQUESTS");

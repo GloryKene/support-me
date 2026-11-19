@@ -95,8 +95,8 @@ describe("GET /api/subscriptions", () => {
       .set(auth)
       .query({ supporterAddress: OTHER_SUPPORTER });
 
-    expect(res.status).toBe(401);
-    expect(res.body.code).toBe("UNAUTHORIZED");
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN");
     expect(mockedPrisma.subscription.findMany).not.toHaveBeenCalled();
   });
 });
@@ -145,7 +145,8 @@ describe("POST /api/subscriptions", () => {
         onChainId: 0,
       });
 
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN");
     expect(mockedPrisma.subscription.create).not.toHaveBeenCalled();
   });
 
@@ -278,7 +279,8 @@ describe("POST /api/subscriptions/:id/cancel", () => {
       .post("/api/subscriptions/1/cancel")
       .set("Authorization", `Bearer ${token}`);
 
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN");
     expect(mockedPrisma.subscription.update).not.toHaveBeenCalled();
   });
 

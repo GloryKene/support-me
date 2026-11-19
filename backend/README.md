@@ -40,6 +40,17 @@ It is built with TypeScript, Express, and Prisma, and is designed to support cre
    http://localhost:4000/health
    ```
 
+## Token claims and compatibility
+
+Tokens are signed with HS256 and carry `iss: support-me` and
+`aud: support-me-api`. Verification pins the algorithm, issuer, audience and
+payload shape before a user id reaches any route handler.
+
+Tokens issued before this change contain no issuer or audience. They remain
+accepted for one release so active sessions are not interrupted. After that
+release, remove the legacy path in `src/lib/tokens.ts` and require everyone to
+sign in again.
+
 ## Postgres integration tests
 
 With the backend dependencies and generated Prisma client already available,

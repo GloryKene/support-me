@@ -10,13 +10,20 @@ import {
   notifyGoalsReached,
 } from "../services/donationNotifications";
 import { applyDonationToGoals } from "../services/goalService";
-import { BadRequestError, NotFoundError } from "../errors/AppError";
+import {
+  BadRequestError,
+  NotFoundError,
+  UnprocessableEntityError,
+} from "../errors/AppError";
 import { RateLimiter } from "../services/rateLimiter";
 import { clientIp, rateLimit } from "../middleware/rateLimit";
 import { getRateLimitConfig } from "../config";
+import { hashDonationRequest } from "../lib/idempotency";
 
 const router = Router();
 const rateLimits = getRateLimitConfig();
+const IDEMPOTENCY_MISMATCH_MESSAGE =
+  "Idempotency-Key was reused with a different request body";
 
 // Donation creation does at least one database query per request, so it is
 // limited per IP and per sender wallet before any of that work happens.
@@ -89,6 +96,13 @@ router.post(
       message,
       transactionHash,
     } = req.body;
+    const requestHash = hashDonationRequest({
+      creatorUsername,
+      senderAddress,
+      amount,
+      currency,
+      transactionHash,
+    });
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
     // A browser donation transaction currently contains one DonatedEvent, so
     // the client-facing report uses the canonical operation/event indices 0.
@@ -127,7 +141,15 @@ router.post(
         where: { key: idempotencyKey },
         include: { donation: true },
       });
-      if (existing && existing.expiresAt > new Date()) return existing.donation;
+      if (existing && existing.expiresAt > new Date()) {
+        // A key may only replay the request that created it. Returning the
+        // stored donation for a different body would hide a real donation
+        // from history and goal progress (#391).
+        if (existing.requestHash !== requestHash) {
+          throw new UnprocessableEntityError(IDEMPOTENCY_MISMATCH_MESSAGE);
+        }
+        return existing.donation;
+      }
       if (existing) await client.donationIdempotencyKey.delete({ where: { key: idempotencyKey } });
 
       const creator = await client.creator.findUnique({ where: { username: creatorUsername } });
@@ -156,7 +178,12 @@ router.post(
         },
       });
       await client.donationIdempotencyKey.create({
-        data: { key: idempotencyKey, donationId: donation.id, expiresAt },
+        data: {
+          key: idempotencyKey,
+          donationId: donation.id,
+          expiresAt,
+          requestHash,
+        },
       });
       // Only a client-reported row that is already verified (no transaction
       // hash — see the `verified` computation above) may touch goal progress.
@@ -182,8 +209,12 @@ router.post(
           where: { key: idempotencyKey },
           include: { donation: true },
         });
-        if (existing && existing.expiresAt > new Date()) donation = existing.donation;
-        else {
+        if (existing && existing.expiresAt > new Date()) {
+          if (existing.requestHash !== requestHash) {
+            throw new UnprocessableEntityError(IDEMPOTENCY_MISMATCH_MESSAGE);
+          }
+          donation = existing.donation;
+        } else {
           // The event listener may have won the unique on-chain identity race
           // while this request was being processed. Its row is the canonical
           // result, so return it rather than surfacing a spurious 500.

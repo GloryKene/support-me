@@ -1,5 +1,4 @@
 import { Router } from "express";
-import * as jwt from "jsonwebtoken";
 import {
   DONATION_EVENT,
   SUBSCRIPTION_CREATED_EVENT,
@@ -14,7 +13,7 @@ import {
   eventBus,
 } from "../services/eventBus";
 import { clientIp } from "../middleware/rateLimit";
-import { getJwtSecret } from "../config";
+import { verifyToken } from "../lib/tokens";
 
 const router = Router();
 
@@ -85,11 +84,7 @@ router.get("/", (req, res) => {
   let tokenWallet: string | null = null;
   if (token) {
     try {
-      const decoded = jwt.verify(token, getJwtSecret()) as {
-        id: number;
-        walletAddress: string | null;
-      };
-      tokenWallet = decoded.walletAddress;
+      tokenWallet = verifyToken(token).walletAddress;
     } catch {
       // Invalid token -> treated as public client
     }

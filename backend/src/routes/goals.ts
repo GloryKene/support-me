@@ -11,7 +11,7 @@ import {
   usernameParamSchema,
 } from "../schemas/goals";
 import { computePeriodEnd, formatGoalAmounts } from "../services/goalService";
-import { NotFoundError, UnauthorizedError } from "../errors/AppError";
+import { ForbiddenError, NotFoundError, UnauthorizedError } from "../errors/AppError";
 
 const router = Router();
 
@@ -56,7 +56,7 @@ router.post(
       throw new NotFoundError("Creator not found");
     }
     if (creator.userId !== req.user.id) {
-      throw new UnauthorizedError("You can only create goals on your own profile");
+      throw new ForbiddenError("You can only create goals on your own profile");
     }
 
     const goal = await prisma.goal.create({
@@ -91,7 +91,7 @@ router.put(
       throw new NotFoundError("Goal not found");
     }
     if (existing.creator.userId !== req.user.id) {
-      throw new UnauthorizedError("You can only edit your own goals");
+      throw new ForbiddenError("You can only edit your own goals");
     }
 
     const updates = req.body as {
@@ -141,7 +141,7 @@ router.delete(
       throw new NotFoundError("Goal not found");
     }
     if (existing.creator.userId !== req.user.id) {
-      throw new UnauthorizedError("You can only delete your own goals");
+      throw new ForbiddenError("You can only delete your own goals");
     }
 
     await prisma.goal.delete({ where: { id } });

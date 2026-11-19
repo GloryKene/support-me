@@ -39,6 +39,15 @@ import request from "supertest";
 import app from "../../app";
 import prisma from "../../prisma";
 import { sendEmail } from "../../services/email/mailer";
+import { hashDonationRequest } from "../../lib/idempotency";
+
+const REPLAY_BODY = {
+  creatorUsername: "bob",
+  senderAddress: "GA7D5LDGFABXNYEO6LZVMTWK5JWEPTODCLYZ7TG4XDZRKKXP6OS5K5JW",
+  amount: 99,
+  currency: "XLM",
+  transactionHash: "tx-replay",
+} as const;
 
 const mockedPrisma = prisma as unknown as {
   creator: { findUnique: jest.Mock; findFirst: jest.Mock };
@@ -292,19 +301,14 @@ describe("POST /api/donations", () => {
     mockedPrisma.donationIdempotencyKey.findUnique.mockResolvedValue({
       key: "donation-1",
       expiresAt: new Date(Date.now() + 60_000),
+      requestHash: hashDonationRequest(REPLAY_BODY),
       donation: original,
     });
 
     const res = await request(app)
       .post("/api/donations")
       .set("Idempotency-Key", "donation-1")
-      .send({
-        creatorUsername: "bob",
-        senderAddress:
-          "GA7D5LDGFABXNYEO6LZVMTWK5JWEPTODCLYZ7TG4XDZRKKXP6OS5K5JW",
-        amount: 99,
-        transactionHash: "tx-replay",
-      });
+      .send(REPLAY_BODY);
 
     expect(res.status).toBe(201);
     expect(res.body).toEqual(original);
@@ -312,6 +316,87 @@ describe("POST /api/donations", () => {
     // A repeated idempotency key must not double-apply the donation to goal
     // progress — the original call already did.
     expect(mockedPrisma.goal.findMany).not.toHaveBeenCalled();
+  });
+
+  it("returns 422 when an idempotency key is replayed with a different body", async () => {
+    const original = { id: 1, creatorId: 7, amount: 10 };
+    mockedPrisma.donationIdempotencyKey.findUnique.mockResolvedValue({
+      key: "donation-1",
+      expiresAt: new Date(Date.now() + 60_000),
+      requestHash: hashDonationRequest({ ...REPLAY_BODY, amount: 10 }),
+      donation: original,
+    });
+
+    const res = await request(app)
+      .post("/api/donations")
+      .set("Idempotency-Key", "donation-1")
+      .send(REPLAY_BODY);
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("UNPROCESSABLE_ENTITY");
+    expect(mockedPrisma.donation.upsert).not.toHaveBeenCalled();
+    expect(mockedPrisma.donationIdempotencyKey.create).not.toHaveBeenCalled();
+    expect(mockedPrisma.goal.findMany).not.toHaveBeenCalled();
+    expect(mockedSendEmail).not.toHaveBeenCalled();
+  });
+
+  it("rejects a replay of a legacy key with no stored request hash", async () => {
+    const original = { id: 1, creatorId: 7, amount: 10 };
+    mockedPrisma.donationIdempotencyKey.findUnique.mockResolvedValue({
+      key: "legacy-key",
+      expiresAt: new Date(Date.now() + 60_000),
+      requestHash: null,
+      donation: original,
+    });
+
+    const res = await request(app)
+      .post("/api/donations")
+      .set("Idempotency-Key", "legacy-key")
+      .send(REPLAY_BODY);
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("UNPROCESSABLE_ENTITY");
+    expect(mockedPrisma.donation.upsert).not.toHaveBeenCalled();
+  });
+
+  it("allows a message-only change to replay the same donation", async () => {
+    const original = { id: 1, creatorId: 7, amount: 10 };
+    mockedPrisma.donationIdempotencyKey.findUnique.mockResolvedValue({
+      key: "donation-message",
+      expiresAt: new Date(Date.now() + 60_000),
+      requestHash: hashDonationRequest(REPLAY_BODY),
+      donation: original,
+    });
+
+    const res = await request(app)
+      .post("/api/donations")
+      .set("Idempotency-Key", "donation-message")
+      .send({ ...REPLAY_BODY, message: "a revised note" });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual(original);
+    expect(mockedPrisma.donation.upsert).not.toHaveBeenCalled();
+  });
+
+  it("stores the canonical request hash with a new idempotency key", async () => {
+    const body = { ...REPLAY_BODY, amount: 10, transactionHash: "tx-hash" };
+    mockedPrisma.creator.findUnique.mockResolvedValue({ id: 7, username: "bob" });
+    mockedPrisma.donation.upsert.mockResolvedValue({ id: 42, ...body });
+
+    const res = await request(app)
+      .post("/api/donations")
+      .set("Idempotency-Key", "new-hash-key")
+      .send(body);
+
+    expect(res.status).toBe(201);
+    expect(mockedPrisma.donationIdempotencyKey.create).toHaveBeenCalledWith({
+      data: {
+        key: "new-hash-key",
+        donationId: 42,
+        expiresAt: expect.any(Date),
+        requestHash: hashDonationRequest(body),
+      },
+    });
   });
 
   it("does not apply an unverified client report to goals", async () => {
@@ -534,19 +619,16 @@ describe("POST /api/donations", () => {
     });
 
     it("does not send any notification when replaying an existing idempotency key (no new donation)", async () => {
+      const body = { ...REPLAY_BODY, transactionHash: "tx-notify-4" };
       const original = { id: 1, creatorId: 7, amount: 10 };
       mockedPrisma.donationIdempotencyKey.findUnique.mockResolvedValue({
         key: "notify-4",
         expiresAt: new Date(Date.now() + 60_000),
+        requestHash: hashDonationRequest(body),
         donation: original,
       });
 
-      const res = await request(app).post("/api/donations").set("Idempotency-Key", "notify-4").send({
-        creatorUsername: "bob",
-        senderAddress: SENDER_ADDRESS,
-        amount: 99,
-        transactionHash: "tx-notify-4",
-      });
+      const res = await request(app).post("/api/donations").set("Idempotency-Key", "notify-4").send(body);
 
       expect(res.status).toBe(201);
       expect(mockedSendEmail).not.toHaveBeenCalled();

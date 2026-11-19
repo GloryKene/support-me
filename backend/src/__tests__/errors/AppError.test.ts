@@ -4,6 +4,7 @@ import {
   ConflictError,
   NotFoundError,
   UnauthorizedError,
+  UnprocessableEntityError,
 } from "../../errors/AppError";
 
 describe("AppError subclasses", () => {
@@ -47,5 +48,13 @@ describe("AppError subclasses", () => {
     const err = new ConflictError("Username already exists");
     expect(err.statusCode).toBe(409);
     expect(err.code).toBe("CONFLICT");
+  });
+
+  it("UnprocessableEntityError maps to 422/UNPROCESSABLE_ENTITY", () => {
+    const err = new UnprocessableEntityError("Request body changed");
+    expect(err).toBeInstanceOf(AppError);
+    expect(err.statusCode).toBe(422);
+    expect(err.code).toBe("UNPROCESSABLE_ENTITY");
+    expect(err.message).toBe("Request body changed");
   });
 });

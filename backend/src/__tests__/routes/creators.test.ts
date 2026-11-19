@@ -2,6 +2,7 @@ jest.mock("../../prisma", () => ({
   __esModule: true,
   default: {
     user: { findUnique: jest.fn().mockResolvedValue({ deletedAt: null }) },
+    $queryRaw: jest.fn(),
     creator: {
       findMany: jest.fn(),
       findUnique: jest.fn(),
@@ -26,6 +27,7 @@ import { challenges } from "../../routes/auth";
 import { Keypair } from "@stellar/stellar-sdk";
 
 const mockedPrisma = prisma as unknown as {
+  $queryRaw: jest.Mock;
   creator: {
     findMany: jest.Mock;
     findUnique: jest.Mock;
@@ -40,6 +42,10 @@ const mockedPrisma = prisma as unknown as {
 };
 
 describe("GET /api/creators", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   it("lists creators, newest first by default", async () => {
     const creators = [{ id: 1, username: "bob", _count: { donations: 0 } }];
     mockedPrisma.creator.findMany.mockResolvedValue(creators);
@@ -53,29 +59,66 @@ describe("GET /api/creators", () => {
       pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
     });
     expect(mockedPrisma.creator.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ orderBy: { createdAt: "desc" }, where: { walletAddress: { not: null } } })
+      expect.objectContaining({
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        where: { walletAddress: { not: null } },
+      })
     );
   });
 
-  it("searches by username/displayName and sorts by donation count", async () => {
-    mockedPrisma.creator.findMany.mockResolvedValue([]);
-    mockedPrisma.creator.count.mockResolvedValue(0);
+  it("searches by username/displayName and ranks by the displayed verified donation count", async () => {
+    mockedPrisma.$queryRaw.mockResolvedValue([{ id: 4 }, { id: 3 }]);
+    mockedPrisma.creator.findMany.mockResolvedValue([
+      { id: 3, username: "cathy", _count: { donations: 2 } },
+      { id: 4, username: "jane", _count: { donations: 5 } },
+    ]);
+    mockedPrisma.creator.count.mockResolvedValue(2);
 
     const res = await request(app).get("/api/creators?q=jane&sort=most-supported");
 
     expect(res.status).toBe(200);
-    expect(mockedPrisma.creator.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        orderBy: { donations: { _count: "desc" } },
-        where: {
-          walletAddress: { not: null },
-          OR: [
-            { username: { contains: "jane", mode: "insensitive" } },
-            { displayName: { contains: "jane", mode: "insensitive" } },
-          ],
-        },
-      })
+    expect(res.body.items.map((item: { id: number }) => item.id)).toEqual([4, 3]);
+
+    const sql = mockedPrisma.$queryRaw.mock.calls[0][0];
+    const query = sql.strings.join(" ");
+    expect(query).toContain("verified = true");
+    expect(query).toContain("COALESCE(counts.\"verifiedDonations\", 0) DESC, c.id DESC");
+    expect(sql.values).toEqual(["jane", "jane", "jane", 20, 0]);
+
+    expect(mockedPrisma.creator.findMany).toHaveBeenCalledWith({
+      where: { id: { in: [4, 3] } },
+      include: { _count: { select: { donations: { where: { verified: true } } } } },
+    });
+  });
+
+  it("pages through creators with identical verified counts exactly once", async () => {
+    const all = [
+      { id: 1, username: "one", _count: { donations: 0 } },
+      { id: 2, username: "two", _count: { donations: 0 } },
+      { id: 3, username: "three", _count: { donations: 0 } },
+      { id: 4, username: "four", _count: { donations: 0 } },
+    ];
+    mockedPrisma.$queryRaw.mockImplementation(async (sql: { values: unknown[] }) => {
+      const offset = sql.values[sql.values.length - 1];
+      return offset === 0 ? [{ id: 4 }, { id: 3 }] : [{ id: 2 }, { id: 1 }];
+    });
+    mockedPrisma.creator.findMany.mockImplementation(
+      async ({ where }: { where: { id: { in: number[] } } }) =>
+        all.filter((item) => where.id.in.includes(item.id))
     );
+    mockedPrisma.creator.count.mockResolvedValue(all.length);
+
+    const page1 = await request(app).get("/api/creators?sort=most-supported&page=1&limit=2");
+    const page2 = await request(app).get("/api/creators?sort=most-supported&page=2&limit=2");
+
+    expect(page1.status).toBe(200);
+    expect(page2.status).toBe(200);
+    const ids = [
+      ...page1.body.items.map((item: { id: number }) => item.id),
+      ...page2.body.items.map((item: { id: number }) => item.id),
+    ];
+    expect(ids).toEqual([4, 3, 2, 1]);
+    expect(new Set(ids).size).toBe(all.length);
   });
 });
 
@@ -291,7 +334,8 @@ describe("PUT /api/creators/:username", () => {
       .set("Authorization", `Bearer ${token}`)
       .send({ bio: "hijack" });
 
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN");
     expect(mockedPrisma.creator.update).not.toHaveBeenCalled();
   });
 
@@ -417,7 +461,8 @@ describe("PATCH /api/creators/:username/theme (#227)", () => {
 
     const res = await patchTheme({ theme });
 
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN");
     expect(mockedPrisma.creator.update).not.toHaveBeenCalled();
   });
 

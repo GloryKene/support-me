@@ -119,7 +119,8 @@ describe("POST /api/goals/:username", () => {
       .set("Authorization", `Bearer ${token}`)
       .send({ targetAmount: 100 });
 
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN");
     expect(mockedPrisma.goal.create).not.toHaveBeenCalled();
   });
 
@@ -235,7 +236,8 @@ describe("PUT /api/goals/:id", () => {
       .set("Authorization", `Bearer ${token}`)
       .send({ status: "EXPIRED" });
 
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN");
     expect(mockedPrisma.goal.update).not.toHaveBeenCalled();
   });
 
@@ -342,7 +344,8 @@ describe("DELETE /api/goals/:id", () => {
 
     const res = await request(app).delete("/api/goals/1").set("Authorization", `Bearer ${token}`);
 
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN");
     expect(mockedPrisma.goal.delete).not.toHaveBeenCalled();
   });
 

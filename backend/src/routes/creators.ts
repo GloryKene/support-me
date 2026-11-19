@@ -129,23 +129,57 @@ router.get(
         : {}),
     };
 
-    const orderBy =
-      sort === "most-supported"
-        ? { donations: { _count: "desc" as const } }
-        : { createdAt: "desc" as const };
+    // Prisma 5 cannot filter a relation inside `orderBy`, so the verified
+    // count used for "most-supported" ranking is computed in SQL. Using the
+    // raw ordered ids and then reloading the rows keeps the same verified
+    // count in both the ranking and the `_count` returned to the client.
+    // `id` is always the final sort key so paging over ties is stable (#392).
+    const countSelect = {
+      select: { donations: { where: { verified: true } } },
+    } as const;
+    let creators: Array<Creator & { _count: { donations: number } }>;
 
-    const [creators, total] = await Promise.all([
-      prisma.creator.findMany({
+    if (sort === "most-supported") {
+      const ranked = await prisma.$queryRaw<Array<{ id: number }>>(Prisma.sql`
+        SELECT c.id
+        FROM "Creator" c
+        LEFT JOIN (
+          SELECT "creatorId", COUNT(*)::int AS "verifiedDonations"
+          FROM "Donation"
+          WHERE verified = true
+          GROUP BY "creatorId"
+        ) counts ON counts."creatorId" = c.id
+        WHERE c."walletAddress" IS NOT NULL
+          AND (
+            ${q ?? null}::text IS NULL
+            OR strpos(lower(c."username"), lower(${q ?? null}::text)) > 0
+            OR strpos(lower(coalesce(c."displayName", '')), lower(${q ?? null}::text)) > 0
+          )
+        ORDER BY COALESCE(counts."verifiedDonations", 0) DESC, c.id DESC
+        LIMIT ${limit} OFFSET ${(page - 1) * limit}
+      `);
+
+      const rows = ranked.length
+        ? await prisma.creator.findMany({
+            where: { id: { in: ranked.map((row) => row.id) } },
+            include: { _count: countSelect },
+          })
+        : [];
+      const byId = new Map(rows.map((row) => [row.id, row]));
+      creators = ranked
+        .map((row) => byId.get(row.id))
+        .filter((row): row is Creator & { _count: { donations: number } } => row !== undefined);
+    } else {
+      creators = await prisma.creator.findMany({
         where,
-        orderBy,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         skip: (page - 1) * limit,
         take: limit,
-        include: {
-          _count: { select: { donations: { where: { verified: true } } } },
-        },
-      }),
-      prisma.creator.count({ where }),
-    ]);
+        include: { _count: countSelect },
+      });
+    }
+
+    const total = await prisma.creator.count({ where });
 
     return res.json({
       items: creators.map(formatCreator),
@@ -376,7 +410,7 @@ router.put(
     // A profile can only be edited by its owner — otherwise anyone could
     // overwrite another creator's payout wallet and redirect their donations.
     if (existing.userId !== req.user.id) {
-      throw new UnauthorizedError("You can only edit your own profile");
+      throw new ForbiddenError("You can only edit your own profile");
     }
 
     // Re-pointing the payout wallet needs proof of control and must not
@@ -423,7 +457,7 @@ router.patch(
       throw new NotFoundError("Creator not found");
     }
     if (existing.userId !== req.user.id) {
-      throw new UnauthorizedError("You can only edit your own profile");
+      throw new ForbiddenError("You can only edit your own profile");
     }
 
     const creator = await prisma.creator.update({

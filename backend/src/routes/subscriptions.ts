@@ -5,7 +5,7 @@ import { asyncHandler } from "../middleware/asyncHandler";
 import { validate } from "../middleware/validate";
 import { createSubscriptionSchema, listSubscriptionsQuerySchema } from "../schemas/subscriptions";
 import { idParamSchema } from "../schemas/common";
-import { NotFoundError, UnauthorizedError } from "../errors/AppError";
+import { ForbiddenError, NotFoundError, UnauthorizedError } from "../errors/AppError";
 
 const router = Router();
 
@@ -32,10 +32,10 @@ router.get(
       if (creatorUsername) {
         const creator = await prisma.creator.findUnique({ where: { username: creatorUsername } });
         if (!creator?.walletAddress || creator.walletAddress !== req.user.walletAddress) {
-          throw new UnauthorizedError("You are not authorized to view these subscriptions");
+          throw new ForbiddenError("You are not authorized to view these subscriptions");
         }
       } else {
-        throw new UnauthorizedError("You can only view your own subscriptions");
+        throw new ForbiddenError("You can only view your own subscriptions");
       }
     } else if (!targetSupporterAddress && !creatorUsername) {
       targetSupporterAddress = req.user.walletAddress;
@@ -72,7 +72,7 @@ router.post(
     // signature; this just records it, so only the supporter who signed it
     // may report it under their own identity.
     if (req.user.walletAddress !== supporterAddress) {
-      throw new UnauthorizedError("You can only record subscriptions you started yourself");
+      throw new ForbiddenError("You can only record subscriptions you started yourself");
     }
 
     const creator = await prisma.creator.findUnique({ where: { username: creatorUsername } });
@@ -123,7 +123,7 @@ router.post(
     // supporter's own wallet; this just reflects that here, so only the
     // supporter who owns the subscription may report it cancelled.
     if (subscription.supporterAddress !== req.user.walletAddress) {
-      throw new UnauthorizedError("You can only cancel your own subscriptions");
+      throw new ForbiddenError("You can only cancel your own subscriptions");
     }
 
     const updated = await prisma.subscription.update({

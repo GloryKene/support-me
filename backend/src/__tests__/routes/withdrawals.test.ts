@@ -106,7 +106,8 @@ describe("POST /api/withdrawals", () => {
       .set("Authorization", `Bearer ${token}`)
       .send({ creatorUsername: "bob", amountIn: 10, anchorTxId: "tx-1" });
 
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN");
     expect(mockedPrisma.withdrawal.create).not.toHaveBeenCalled();
   });
 
