@@ -35,3 +35,4 @@ frontend/app/sentry-example-page/
 /fix_*.py
 /resolve*.py
 /extract.py
+config.bat
