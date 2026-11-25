@@ -10,27 +10,19 @@ import {
   getTwitterOAuthConfig,
   type TwitterProfile,
 } from "./twitterOAuth";
+import { TwitterStateStore } from "./twitterStateStore";
 
 const STATE_TTL_MS = 10 * 60 * 1000;
+const STATE_MAX_ENTRIES = 1_000;
 const PROVIDER = "twitter";
 
-interface PendingState {
-  codeVerifier: string;
-  expiresAt: number;
-}
-
 // Keyed by the opaque `state` param round-tripped through the redirect, the
-// same in-memory-Map-with-TTL pattern as the wallet challenge flow in
-// routes/auth.ts. Holds the PKCE verifier server-side so it's never
-// exposed to the browser or the OAuth provider.
-const pendingStates = new Map<string, PendingState>();
-
-function pruneExpiredStates(): void {
-  const now = Date.now();
-  for (const [state, entry] of pendingStates) {
-    if (entry.expiresAt < now) pendingStates.delete(state);
-  }
-}
+// same pattern as the wallet challenge flow in routes/auth.ts but bounded and
+// self-sweeping (#438): every call to startTwitterAuth adds an entry, so an
+// unthrottled flood must not be able to grow it without limit.
+// Exported for the rate-limit/eviction tests.
+export const pendingStates = new TwitterStateStore(STATE_MAX_ENTRIES);
+pendingStates.startSweeping();
 
 /** Starts the flow: returns the URL the frontend should redirect the user to. */
 export function startTwitterAuth(): string {
@@ -38,8 +30,6 @@ export function startTwitterAuth(): string {
   if (!config) {
     throw new ServiceUnavailableError("Twitter sign-in is not configured");
   }
-
-  pruneExpiredStates();
 
   const state = randomBytes(16).toString("hex");
   const { verifier, challenge } = generatePkcePair();
@@ -71,12 +61,11 @@ export async function completeTwitterAuth(code: string, state: string): Promise<
     throw new BadRequestError("code and state are required");
   }
 
-  pruneExpiredStates();
-  const pending = pendingStates.get(state);
+  // consume() is single-use and drops expired states, like the wallet challenge.
+  const pending = pendingStates.consume(state);
   if (!pending) {
     throw new UnauthorizedError("Invalid or expired OAuth state, please try again");
   }
-  pendingStates.delete(state); // single-use, like the wallet challenge
 
   const { accessToken } = await exchangeCodeForToken(config, code, pending.codeVerifier);
   const profile = await fetchTwitterProfile(accessToken);

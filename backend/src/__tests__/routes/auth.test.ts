@@ -317,14 +317,32 @@ describe("GET /api/auth/twitter/callback (#14)", () => {
     expect(res.status).toBe(401);
   });
 
-  it("returns a clear error when Twitter denies or the exchange fails", async () => {
-    mockedCompleteTwitterAuth.mockRejectedValue(new Error("Twitter token exchange failed (400): access_denied"));
+  it("returns 502 (not 500) and no provider body when Twitter is unavailable (#438)", async () => {
+    const { BadGatewayError } = await import("../../errors/AppError");
+    mockedCompleteTwitterAuth.mockRejectedValue(
+      new BadGatewayError("Twitter token exchange failed, please try again")
+    );
 
     const res = await request(app)
       .get("/api/auth/twitter/callback")
       .query({ code: "auth-code", state: "state-value" });
 
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe("BAD_GATEWAY");
+    expect(JSON.stringify(res.body)).not.toMatch(/access_denied|invalid_grant/);
+  });
+
+  it("returns 401 when Twitter rejects the authorization code (#438)", async () => {
+    const { UnauthorizedError } = await import("../../errors/AppError");
+    mockedCompleteTwitterAuth.mockRejectedValue(
+      new UnauthorizedError("Twitter rejected the token exchange, please try again")
+    );
+
+    const res = await request(app)
+      .get("/api/auth/twitter/callback")
+      .query({ code: "auth-code", state: "state-value" });
+
+    expect(res.status).toBe(401);
   });
 });
 

@@ -87,6 +87,23 @@ export const magicLinkEmailLimiter = new RateLimiter(
 );
 magicLinkEmailLimiter.startSweeping();
 
+// Per-IP limits on both Twitter OAuth endpoints (#438). The start endpoint
+// adds a pending PKCE state per call, and the callback spends a provider
+// round-trip and an account lookup, so an unauthenticated caller must not be
+// able to drive either one flat out. Separate limiters because a real sign-in
+// is one start and one callback, and flagging a user out of starting because
+// callbacks were retried would be unhelpful.
+export const twitterStartIpLimiter = new RateLimiter(
+  rateLimits.auth.ipMax,
+  rateLimits.auth.windowMs
+);
+twitterStartIpLimiter.startSweeping();
+export const twitterCallbackIpLimiter = new RateLimiter(
+  rateLimits.auth.ipMax,
+  rateLimits.auth.windowMs
+);
+twitterCallbackIpLimiter.startSweeping();
+
 router.post(
   '/challenge',
   rateLimit(challengeIpLimiter, clientIp, 'sign-in challenge'),
@@ -220,6 +237,7 @@ router.post(
 // /twitter/callback once Twitter redirects back with a code.
 router.get(
   '/twitter',
+  rateLimit(twitterStartIpLimiter, clientIp, 'Twitter sign-in'),
   asyncHandler(async (req, res) => {
     const redirectUrl = startTwitterAuth();
     return res.json({ redirectUrl });
@@ -228,6 +246,7 @@ router.get(
 
 router.get(
   '/twitter/callback',
+  rateLimit(twitterCallbackIpLimiter, clientIp, 'Twitter sign-in'),
   validate({ query: twitterCallbackSchema }),
   asyncHandler(async (req, res) => {
     const { code, state } = req.query as unknown as { code: string; state: string };

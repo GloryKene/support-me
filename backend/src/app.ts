@@ -93,7 +93,16 @@ app.use(cors(corsOptions));
 // re-serialized (and could byte-for-byte differ from what Resend signed).
 app.use("/api/webhooks/email", express.raw({ type: "application/json" }), emailWebhooksRouter);
 
-app.use(express.json());
+/**
+ * JSON bodies are capped deliberately at 100kb (#519) instead of inheriting
+ * body-parser's default, so the limit is visible in one place and documented
+ * in docs/CONFIGURATION.md. Over-limit requests are answered with a 413
+ * PAYLOAD_TOO_LARGE by errorHandler; email webhooks use express.raw() above
+ * and are verified against the exact bytes they received.
+ */
+const JSON_BODY_LIMIT = "100kb";
+
+app.use(express.json({ limit: JSON_BODY_LIMIT }));
 
 // SEO routes (standard paths: /sitemap.xml, /robots.txt)
 app.use("/", seoRouter);
@@ -147,11 +156,13 @@ app.get("/health", healthRateLimit, async (req, res) => {
       ? "unhealthy"
       : subscriptionExecutor.status === "unhealthy"
         ? "unhealthy"
-        : sorobanRpc.status !== "ok"
+        : subscriptionExecutor.status === "degraded"
           ? "degraded"
-          : eventListener.gapDetected
+          : sorobanRpc.status !== "ok"
             ? "degraded"
-            : "ok";
+            : eventListener.gapDetected
+              ? "degraded"
+              : "ok";
   // Public liveness stays minimal. The dependency breakdown (including the
   // listener cursor and reset reason) is only for authorized operators (#440).
   if (!hasHealthDetailAccess(req)) return res.json({ status });
@@ -165,7 +176,10 @@ app.get("/health", healthRateLimit, async (req, res) => {
 
 app.get("/health/executor", healthRateLimit, (req, res) => {
   const subscriptionExecutor = executorHealth.getHealth();
-  const status = subscriptionExecutor.status === "unhealthy" ? "unhealthy" : "ok";
+  // `disabled` stays `ok` for backward compatibility; `degraded` and
+  // `unhealthy` are passed through so monitors see a run whose charges are
+  // mostly or entirely failing (#500).
+  const status = subscriptionExecutor.status === "disabled" ? "ok" : subscriptionExecutor.status;
   // Unauthenticated callers get only the aggregate status. Balances, error
   // strings and subscription ids require the operator detail secret (#440).
   if (!hasHealthDetailAccess(req)) return res.json({ status });

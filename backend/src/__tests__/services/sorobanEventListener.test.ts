@@ -1,4 +1,5 @@
 import {
+  isCheckConstraintViolation,
   sorobanEventListener,
   RawEvent,
 } from "../../services/sorobanEventListener";
@@ -119,6 +120,28 @@ function donatedRawEvent(overrides: Partial<RawEvent> = {}): RawEvent {
     ...overrides,
   };
 }
+
+describe("isCheckConstraintViolation", () => {
+  it("recognizes the raw-SQL and ORM-wrapped forms of SQLSTATE 23514", () => {
+    expect(isCheckConstraintViolation({ code: "23514" })).toBe(true);
+    expect(isCheckConstraintViolation({ code: "P2010", meta: { code: "23514" } })).toBe(true);
+    expect(
+      isCheckConstraintViolation({
+        message:
+          'Error occurred during query execution: PostgresError { code: "23514", message: "violates check constraint" }',
+      })
+    ).toBe(true);
+    expect(
+      isCheckConstraintViolation({ code: "P2004", meta: { database_error: 'violates check constraint "x"' } })
+    ).toBe(true);
+  });
+
+  it("does not mistake other Prisma failures for a CHECK violation", () => {
+    expect(isCheckConstraintViolation({ code: "P2002" })).toBe(false);
+    expect(isCheckConstraintViolation(new Error("connection reset"))).toBe(false);
+    expect(isCheckConstraintViolation(null)).toBe(false);
+  });
+});
 
 describe("SorobanEventListener event processing & reconciliation", () => {
   beforeEach(() => {

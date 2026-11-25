@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { Prisma } from "@prisma/client";
 import { Webhook } from "standardwebhooks";
 import prisma from "../prisma";
 import { asyncHandler } from "../middleware/asyncHandler";
@@ -60,9 +61,10 @@ router.post(
 
     const webhook = new Webhook(secret);
     let event: ResendWebhookPayload;
+    const svixId = req.header("svix-id") || "";
     try {
       event = webhook.verify(payloadBody, {
-        "webhook-id": req.header("svix-id") || "",
+        "webhook-id": svixId,
         "webhook-timestamp": req.header("svix-timestamp") || "",
         "webhook-signature": req.header("svix-signature") || "",
       }) as unknown as ResendWebhookPayload;
@@ -91,37 +93,23 @@ router.post(
       return res.status(200).json({ received: true });
     }
 
-    // One event row per recipient (#534): a message can be addressed to
-    // several people, and only recording `to[0]` silently dropped a bounce
-    // for every other one, so the suppressed address was never recorded.
-    // Addresses are normalized and de-duplicated so the same person listed
-    // twice does not produce two identical rows.
-    const recipients = [
-      ...new Set(
-        (Array.isArray(data.to) ? data.to : [])
-          .filter((address): address is string => typeof address === "string" && address.trim().length > 0)
-          .map(normalizeRecipient)
-      ),
-    ];
-
-    if (recipients.length === 0) {
-      log("warn", "email webhook missing recipient", { type: event.type });
-      return res.status(200).json({ received: true });
+    try {
+      await prisma.emailEvent.create({
+        data: {
+          recipient,
+          subject: event.data.subject || "",
+          type,
+          providerMessageId: event.data.email_id,
+          svixId,
+          errorDetail: event.data.bounce?.message,
+        },
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+        return res.status(200).json({ received: true });
+      }
+      throw err;
     }
-
-    await Promise.all(
-      recipients.map((recipient) =>
-        prisma.emailEvent.create({
-          data: {
-            recipient,
-            subject: data.subject || "",
-            type,
-            providerMessageId: data.email_id,
-            errorDetail: data.bounce?.message,
-          },
-        })
-      )
-    );
 
     if (type === "BOUNCED" || type === "COMPLAINED") {
       for (const recipient of recipients) {

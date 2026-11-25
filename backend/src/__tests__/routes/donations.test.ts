@@ -10,6 +10,7 @@ jest.mock("../../prisma", () => ({
     },
     donation: {
       findMany: jest.fn(),
+      findFirst: jest.fn(),
       count: jest.fn(),
       create: jest.fn(),
       upsert: jest.fn(),
@@ -52,7 +53,13 @@ const REPLAY_BODY = {
 const mockedPrisma = prisma as unknown as {
   creator: { findUnique: jest.Mock; findFirst: jest.Mock };
   user: { findUnique: jest.Mock };
-  donation: { findMany: jest.Mock; count: jest.Mock; create: jest.Mock; upsert: jest.Mock };
+  donation: {
+    findMany: jest.Mock;
+    findFirst: jest.Mock;
+    count: jest.Mock;
+    create: jest.Mock;
+    upsert: jest.Mock;
+  };
   donationIdempotencyKey: {
     findMany: jest.Mock;
     deleteMany: jest.Mock;
@@ -129,6 +136,65 @@ describe("GET /api/donations", () => {
       skip: 0,
       take: 20,
     });
+  });
+});
+
+describe("GET /api/donations/:transactionHash (#448)", () => {
+  const TX_HASH = "abc123def456";
+
+  it("returns a verified donation with its creator for the receipt page", async () => {
+    mockedPrisma.donation.findFirst.mockResolvedValue({
+      transactionHash: TX_HASH,
+      amount: { toString: () => "25" },
+      currency: "XLM",
+      message: "Keep it up",
+      createdAt: new Date("2026-11-19T10:00:00.000Z"),
+      verified: true,
+      creator: { username: "maya", displayName: "Maya", avatarUrl: null },
+    });
+
+    const res = await request(app).get(`/api/donations/${TX_HASH}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      transactionHash: TX_HASH,
+      amount: "25",
+      currency: "XLM",
+      message: "Keep it up",
+      createdAt: "2026-11-19T10:00:00.000Z",
+      verified: true,
+      creator: { username: "maya", displayName: "Maya", avatarUrl: null },
+    });
+    // Only on-chain-verified rows may back a receipt.
+    expect(mockedPrisma.donation.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { transactionHash: TX_HASH, verified: true } })
+    );
+  });
+
+  it("does not expose the sender's wallet address", async () => {
+    mockedPrisma.donation.findFirst.mockResolvedValue({
+      transactionHash: TX_HASH,
+      amount: { toString: () => "25" },
+      currency: "XLM",
+      message: null,
+      createdAt: new Date("2026-11-19T10:00:00.000Z"),
+      verified: true,
+      creator: { username: "maya", displayName: "Maya", avatarUrl: null },
+    });
+
+    const res = await request(app).get(`/api/donations/${TX_HASH}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.senderAddress).toBeUndefined();
+  });
+
+  it("returns 404 when no verified donation matches the transaction hash", async () => {
+    mockedPrisma.donation.findFirst.mockResolvedValue(null);
+
+    const res = await request(app).get("/api/donations/unknown-hash");
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe("NOT_FOUND");
   });
 });
 

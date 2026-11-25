@@ -10,7 +10,12 @@ import {
   updateGoalSchema,
   usernameParamSchema,
 } from "../schemas/goals";
-import { computePeriodEnd, formatGoalAmounts, goalMeetsTarget } from "../services/goalService";
+import {
+  computePeriodEnd,
+  formatGoalAmounts,
+  formatGoalPeriodAmounts,
+  goalMeetsTarget,
+} from "../services/goalService";
 import { notifyGoalsReached } from "../services/donationNotifications";
 import { BadRequestError, ForbiddenError, NotFoundError, UnauthorizedError } from "../errors/AppError";
 
@@ -37,6 +42,29 @@ router.get(
     });
 
     return res.json({ items: goals.map(formatGoalAmounts) });
+  })
+);
+
+// Public: a recurring goal's finished periods, newest first — how much each
+// period raised and whether it reached its target. Rows are written by the
+// reset in services/goalService.ts just before a period's amount is zeroed.
+router.get(
+  "/:id/periods",
+  validate({ params: goalIdParamSchema }),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params as unknown as { id: number };
+
+    const goal = await prisma.goal.findUnique({ where: { id } });
+    if (!goal) {
+      throw new NotFoundError("Goal not found");
+    }
+
+    const periods = await prisma.goalPeriod.findMany({
+      where: { goalId: id },
+      orderBy: { end: "desc" },
+    });
+
+    return res.json({ items: periods.map(formatGoalPeriodAmounts) });
   })
 );
 
