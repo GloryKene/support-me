@@ -14,6 +14,17 @@ after a change.
 | `NODE_ENV` | Optional. Set explicitly in deployed environments. | Unset is treated as non-production by environment checks; `production` enables strict startup validation, and `test` enables test-only behavior. |
 | `PORT` | Optional. | `4000`. |
 
+## Request body limit
+
+JSON request bodies are capped at **100kb** by the explicit
+`express.json({ limit: "100kb" })` in `backend/src/app.ts` (#519). This is a
+deliberate code constant (`JSON_BODY_LIMIT`), not the body-parser default and
+not an environment variable; changing it is a code change. A body over the cap
+returns `413` with `code: "PAYLOAD_TOO_LARGE"` and the request id, and is not
+sent to Sentry. Unsupported charsets/content encodings return `415`. The email
+webhook route uses `express.raw()` so Svix can verify the exact signed bytes
+and is unaffected by this JSON cap.
+
 ## Browser access and proxy
 
 | Variable | Required? | Default / behavior |

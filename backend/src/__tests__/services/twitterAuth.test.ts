@@ -21,7 +21,7 @@ import {
   fetchTwitterProfile,
   getTwitterOAuthConfig,
 } from "../../services/twitterOAuth";
-import { completeTwitterAuth, startTwitterAuth } from "../../services/twitterAuth";
+import { completeTwitterAuth, pendingStates, startTwitterAuth } from "../../services/twitterAuth";
 
 const mockedPrisma = prisma as unknown as {
   user: { create: jest.Mock };
@@ -51,6 +51,7 @@ function startFlow() {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  pendingStates.clear();
   mockedGetConfig.mockReturnValue(CONFIG);
   mockedPrisma.$transaction.mockImplementation((callback: (client: typeof mockedPrisma) => unknown) =>
     callback(mockedPrisma)
@@ -76,6 +77,28 @@ describe("startTwitterAuth (#14)", () => {
     const first = startFlow().state;
     const second = startFlow().state;
     expect(first).not.toBe(second);
+  });
+
+  it("caps the pending state map under a flood instead of growing without limit (#438)", () => {
+    const startedAt = Date.now();
+    for (let i = 0; i < 2_500; i++) startTwitterAuth();
+
+    // One entry per call would be 2,500; the store is bounded.
+    expect(pendingStates.size).toBeLessThanOrEqual(1_000);
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+  });
+
+  it("rejects a state after its 10-minute TTL even if it was never swept (#438)", async () => {
+    const state = new URL(startTwitterAuth()).searchParams.get("state")!;
+    const now = Date.now();
+    const spy = jest.spyOn(Date, "now").mockReturnValue(now + 11 * 60 * 1000);
+
+    try {
+      await expect(completeTwitterAuth("code", state)).rejects.toMatchObject({ statusCode: 401 });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(mockedExchange).not.toHaveBeenCalled();
   });
 });
 

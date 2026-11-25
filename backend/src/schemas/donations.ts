@@ -7,6 +7,11 @@ export const listDonationsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
+// A receipt lookup is addressed by the on-chain transaction hash (#448).
+export const donationTxHashParamSchema = z.object({
+  transactionHash: txHash,
+});
+
 export const createDonationSchema = z.object({
   creatorUsername: z.string().min(1, "creatorUsername is required"),
   senderAddress: stellarAddress,
