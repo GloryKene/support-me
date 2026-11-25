@@ -2,6 +2,10 @@ import type { NextConfig } from "next";
 import { withSentryConfig } from "@sentry/nextjs";
 
 const nextConfig: NextConfig = {
+  env: {
+    // Inline a value even when the flag is unset so the mock branches can be removed.
+    NEXT_PUBLIC_E2E: process.env.NEXT_PUBLIC_E2E ?? '',
+  },
   images: {
     remotePatterns: [
       {

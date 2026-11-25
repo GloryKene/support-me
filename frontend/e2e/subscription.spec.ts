@@ -77,7 +77,7 @@ test.describe('Subscription Flows', () => {
     await expect(cancelBtn).toBeVisible();
     await cancelBtn.click();
 
-    const confirmBtn = page.getByRole('button', { name: 'Cancel donation' });
+    const confirmBtn = page.getByRole('button', { name: 'Cancel donation', exact: true });
     await expect(confirmBtn).toBeVisible();
     await confirmBtn.click();
 

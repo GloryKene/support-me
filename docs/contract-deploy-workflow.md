@@ -10,8 +10,8 @@ deployment that changes contracts holding live state.
 ## Before you deploy
 
 - Review the contract changes and run the Rust checks below.
-- Install Rust 1.84 or newer, the `wasm32v1-none` target, and the current Stellar
-  CLI (`stellar`). Keep the CLI version recorded with the release notes.
+- The repository pins Rust 1.84.0 via `rust-toolchain.toml` with the `wasm32v1-none` target and components (`rustfmt`, `clippy`).
+- Install the current Stellar CLI (`stellar`). Keep the CLI version recorded with the release notes.
 - Use a funded Testnet deployer account. For production promotion, use the
   approved admin/multisig process; do not use a developer's personal wallet.
 - Decide the admin addresses, threshold, timelock, and subscription executor
@@ -28,14 +28,14 @@ From the repository root:
 ```bash
 rustup target add wasm32v1-none
 cargo fmt --all -- --check
-cargo test --workspace
+cargo test --workspace --locked
 cargo build --manifest-path contracts/creator-registry/Cargo.toml \
-  --target wasm32v1-none --release
+  --target wasm32v1-none --release --locked
 cargo build --manifest-path contracts/donation/Cargo.toml \
-  --target wasm32v1-none --release
+  --target wasm32v1-none --release --locked
 ```
 
-Confirm both deployable files exist before proceeding:
+Confirm both deployable files exist and do not exceed the 64 KB (65,536 bytes) Soroban WASM size budget before proceeding:
 
 ```bash
 test -s target/wasm32v1-none/release/creator_registry.wasm

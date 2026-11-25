@@ -33,6 +33,15 @@ vi.mock('@/lib/useNgnRate', () => ({
   }),
 }));
 
+vi.mock('@/lib/usePrices', () => ({
+  usePrices: () => ({
+    XLM: 0.12,
+    USDC: 1,
+  }),
+}));
+
+const mockLoadAccount = vi.hoisted(() => vi.fn());
+
 vi.mock('@stellar/stellar-sdk', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@stellar/stellar-sdk')>();
   return {
@@ -40,12 +49,7 @@ vi.mock('@stellar/stellar-sdk', async (importOriginal) => {
     Horizon: {
       ...actual.Horizon,
       Server: class MockServer {
-        loadAccount = vi.fn().mockResolvedValue({
-          balances: [
-            { asset_type: 'native', balance: '100.5' },
-            { asset_code: 'USDC', asset_issuer: 'GBUSDC', balance: '250.0' },
-          ],
-        });
+        loadAccount = mockLoadAccount;
       },
     },
   };
@@ -71,6 +75,13 @@ describe('WithdrawPage', () => {
   };
 
   beforeEach(() => {
+    mockLoadAccount.mockResolvedValue({
+      balances: [
+        { asset_type: 'native', balance: '100.5' },
+        { asset_code: 'USDC', asset_issuer: 'GBUSDC', balance: '250.0' },
+      ],
+    });
+
     process.env.NEXT_PUBLIC_USDC_ISSUER = 'GBUSDC';
 
     mockUseAuth.mockReturnValue({
@@ -265,5 +276,102 @@ describe('WithdrawPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Simulate withdrawal/i }));
 
     expect(await screen.findByText('Invalid withdrawal parameters')).toBeInTheDocument();
+  });
+
+  it('allows toggling between USDC and XLM withdrawal currency (#154)', async () => {
+    render(<WithdrawPage />);
+
+    // Initially defaults to USDC when user holds USDC
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Amount \(USDC\)/i)).toBeInTheDocument();
+    });
+
+    // Toggle to XLM
+    const xlmBtn = screen.getByRole('button', { name: /XLM/i });
+    fireEvent.click(xlmBtn);
+
+    // Label updates to XLM and Max button reflects XLM balance (101)
+    expect(screen.getByLabelText(/Amount \(XLM\)/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Use max \(101 XLM\)/i })).toBeInTheDocument();
+
+    // Clicking Max fills input
+    fireEvent.click(screen.getByRole('button', { name: /Use max \(101 XLM\)/i }));
+    expect(screen.getByLabelText(/Amount \(XLM\)/i)).toHaveValue('101');
+
+    // Shows estimated Naira based on XLM rate (101 * 0.12 * 1500 = ₦18,180)
+    expect(screen.getByText(/₦18,180/)).toBeInTheDocument();
+
+    // Toggle back to USDC
+    const usdcBtn = screen.getByRole('button', { name: /USDC/i });
+    fireEvent.click(usdcBtn);
+    expect(screen.getByLabelText(/Amount \(USDC\)/i)).toBeInTheDocument();
+  });
+
+  it('automatically selects XLM for a creator holding only XLM and allows successful cash out (#154)', async () => {
+    // Mock user having only XLM balance
+    mockLoadAccount.mockResolvedValue({
+      balances: [{ asset_type: 'native', balance: '200.0' }],
+    });
+
+    // Mock verify-account
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ accountName: 'ALICE JANE DOE' }),
+    } as Response);
+
+    // Mock POST /api/withdrawals with XLM
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      json: async () => ({
+        id: 11,
+        creatorUsername: 'alice',
+        amountIn: 100,
+        amountOut: 18000,
+        fee: 0,
+        currency: 'XLM',
+        anchorTxId: 'PL-TESTXLM456',
+        status: 'completed',
+      }),
+    } as Response);
+
+    render(<WithdrawPage />);
+
+    // Since only XLM is held, currency is automatically set to XLM
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Amount \(XLM\)/i)).toBeInTheDocument();
+    });
+
+    // Try amount exceeding XLM balance (balance is 200)
+    fireEvent.change(screen.getByLabelText(/Amount \(XLM\)/i), { target: { value: '500' } });
+    fireEvent.click(screen.getByRole('button', { name: /Simulate withdrawal/i }));
+    expect(await screen.findByText('Amount exceeds your available XLM balance.')).toBeInTheDocument();
+
+    // Fill valid XLM amount
+    fireEvent.change(screen.getByLabelText(/Amount \(XLM\)/i), { target: { value: '100' } });
+    fireEvent.change(screen.getByLabelText(/Bank/i), { target: { value: 'GTBank' } });
+    fireEvent.change(screen.getByLabelText(/Account number/i), { target: { value: '0123456789' } });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Account holder: ALICE JANE DOE/i)).toBeInTheDocument();
+    });
+
+    // Submit withdrawal
+    fireEvent.click(screen.getByRole('button', { name: /Simulate withdrawal/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Withdrawal recorded (Demo)')).toBeInTheDocument();
+      expect(screen.getByText('PL-TESTXLM456')).toBeInTheDocument();
+      expect(screen.getByText(/Simulated off-ramp of 100 XLM to Naira/i)).toBeInTheDocument();
+    });
+
+    // Check that POST /api/withdrawals was called with currency: 'XLM'
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/withdrawals'),
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"currency":"XLM"'),
+      })
+    );
   });
 });

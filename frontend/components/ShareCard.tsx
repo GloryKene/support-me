@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { QRCodeCanvas } from 'qrcode.react';
 import { toast } from 'sonner';
+import { downloadBlob } from '@/lib/download';
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://support-mee.vercel.app';
 
@@ -269,12 +270,7 @@ export function ShareCard({ creator, donations, onClose }: ShareCardProps) {
     if (!canvas) return;
     canvas.toBlob((blob) => {
       if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${creator.username}-supportme-share-${size}.png`;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `${creator.username}-supportme-share-${size}.png`);
     }, 'image/png');
   };
 

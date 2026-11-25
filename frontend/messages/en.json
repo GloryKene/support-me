@@ -51,6 +51,7 @@
     "recurringMessageHint": "Messages apply to one-time tips only.",
     "makeRecurring": "Make it recurring",
     "intervalWeekly": "Weekly",
+    "intervalLabel": "Donation interval",
     "intervalMonthly": "Monthly",
     "intervalCustom": "Custom",
     "daysBetweenChargesLabel": "Days between charges",

@@ -32,8 +32,20 @@ test.describe('Authentication Flows', () => {
     expect(authToken).toBeNull();
   });
 
-  test('user can sign out using wallet menu', async ({ page }) => {
+  test('user can retry a failed sign-out from the wallet menu', async ({ page }) => {
     await setupE2EMocks(page);
+    await page.route('**/api/auth/logout', async (route) => {
+      await route.fulfill({
+        status: 204,
+        headers: {
+          'Access-Control-Allow-Origin': new URL(page.url()).origin,
+          'Access-Control-Allow-Credentials': 'true',
+        },
+      });
+    });
+    await page.route('**/api/auth/logout', async (route) => {
+      await route.abort();
+    }, { times: 1 });
     await setAuthenticatedSession(page);
 
     // 1. Visit app hub as an authenticated user
@@ -49,6 +61,11 @@ test.describe('Authentication Flows', () => {
     const signOutBtn = page.getByRole('menuitem', { name: 'Sign Out' });
     await expect(signOutBtn).toBeVisible();
     await signOutBtn.click();
+
+    await expect(page.getByText('Could not sign out')).toBeVisible();
+    await expect(page).toHaveURL(/\/app$/);
+    await expect(walletChip).toBeVisible();
+    await page.getByRole('button', { name: 'Retry', exact: true }).click();
 
     // 4. Should redirect to landing page and show "Connect Wallet"
     await page.waitForURL('**/');

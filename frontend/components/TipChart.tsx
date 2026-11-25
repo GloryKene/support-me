@@ -27,7 +27,7 @@ interface Bucket {
   count: number;
 }
 
-function buildBuckets(donations: Donation[], days: number | null): { buckets: Bucket[]; unit: string } {
+export function buildBuckets(donations: Donation[], days: number | null): { buckets: Bucket[]; unit: string } {
   const now = Date.now();
   const dayMs = 86_400_000;
 
@@ -112,11 +112,11 @@ export function TipChart({ donations }: { donations: Donation[] }) {
       {windowCount === 0 ? (
         <p className="text-muted font-medium py-8 text-center">No tips in this window yet.</p>
       ) : (
-        <div className="flex items-end gap-1.5 h-40" role="img" aria-label="Tip volume over time">
+        <div className="flex items-end gap-1.5 h-40" role="region" aria-label={`Tip volume over time, ${bucketLabel(buckets[0].start)} to ${bucketLabel(buckets[buckets.length - 1].start)}`}>
           {buckets.map((b, i) => {
             const pct = (b.volume / maxVolume) * 100;
             return (
-              <div key={i} className="flex-1 flex flex-col items-center justify-end h-full group relative">
+              <div key={i} className="flex-1 flex flex-col items-center justify-end h-full group relative" tabIndex={0} aria-label={`Date ${bucketLabel(b.start)}: ${b.volume.toFixed(2)} XLM, ${b.count} tip${b.count===1 ? '' : 's'}`}>
                 {b.count > 0 && (
                   <div className="absolute -top-1 opacity-0 group-hover:opacity-100 transition text-[10px] font-bold bg-ink text-background px-1.5 py-0.5 rounded whitespace-nowrap z-10 pointer-events-none">
                     {b.volume.toFixed(2)} XLM · {b.count}×

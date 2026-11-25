@@ -322,8 +322,16 @@ export default function AppHubPage() {
               </span>
             </div>
             <p className="text-sm text-muted mb-4 font-medium">
-              Simulate converting your USDC to Naira and sending it straight to your bank account.
+              Simulate converting your XLM or USDC to Naira and sending it straight to your bank account.
             </p>
+            <div className="flex flex-wrap items-center gap-2 mb-4">
+              <span className="text-xs font-bold px-2 py-0.5 rounded bg-brand-yellow/30 border border-ink/20 text-ink">
+                Direct XLM Cash-out
+              </span>
+              <span className="text-xs font-bold px-2 py-0.5 rounded bg-brand-cyan/30 border border-ink/20 text-ink">
+                Direct USDC Cash-out
+              </span>
+            </div>
             <Link
               href="/app/withdraw"
               className="btn-brutal btn-brutal-primary w-full"

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { notify } from '@/lib/notify';
 import { API_URL } from '@/lib/api';
 import {
@@ -22,6 +22,8 @@ interface ThemeEditorProps {
   token: string | null;
   /** The creator's saved theme; null means the default design. */
   initialTheme: ProfileTheme | null;
+  /** Reports whether the theme draft has unsaved changes. */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 /**
@@ -29,7 +31,13 @@ interface ThemeEditorProps {
  * draft. Changes only reach the profile when saved, and saving is blocked
  * while the draft fails WCAG AA contrast.
  */
-export function ThemeEditor({ username, displayName, token, initialTheme }: ThemeEditorProps) {
+export function ThemeEditor({
+  username,
+  displayName,
+  token,
+  initialTheme,
+  onDirtyChange,
+}: ThemeEditorProps) {
   const [saved, setSaved] = useState<ProfileTheme>(initialTheme ?? DEFAULT_THEME);
   const [draft, setDraft] = useState<ProfileTheme>(saved);
   const [saving, setSaving] = useState(false);
@@ -37,6 +45,16 @@ export function ThemeEditor({ username, displayName, token, initialTheme }: Them
   const issues = themeContrastIssues(draft);
   const dirty = !sameTheme(draft, saved);
   const layout = THEME_LAYOUTS[draft.layout];
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  // Clear the reported dirty state if the editor unmounts with unsaved edits.
+  useEffect(() => {
+    return () => onDirtyChange?.(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const update = <K extends keyof ProfileTheme>(key: K, value: ProfileTheme[K]) =>
     setDraft((prev) => ({ ...prev, [key]: value }));

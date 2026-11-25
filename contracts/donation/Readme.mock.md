@@ -184,7 +184,6 @@ Data: DonatedEvent {
     memo: String,
     timestamp: u64,
     donation_id: u32,
-    fee_amount: i128,
     subscription_id: Option<u64>,
 }
 ```

@@ -97,7 +97,7 @@ declare global {
 // Opens the built-in wallet picker modal (Freighter, xBull, Albedo, Rabet, Lobstr)
 // and returns the connected public address.
 export const connectWallet = async (): Promise<string | null> => {
-  if (typeof window !== 'undefined' && window.__SUPPORTME_MOCK_WALLET__?.connectWallet) {
+  if (process.env.NEXT_PUBLIC_E2E === 'true' && typeof window !== 'undefined' && window.__SUPPORTME_MOCK_WALLET__?.connectWallet) {
     return window.__SUPPORTME_MOCK_WALLET__.connectWallet();
   }
   ensureInit();
@@ -119,7 +119,7 @@ export const connectWallet = async (): Promise<string | null> => {
 };
 
 export const disconnectWallet = async (): Promise<void> => {
-  if (typeof window !== 'undefined' && window.__SUPPORTME_MOCK_WALLET__?.disconnectWallet) {
+  if (process.env.NEXT_PUBLIC_E2E === 'true' && typeof window !== 'undefined' && window.__SUPPORTME_MOCK_WALLET__?.disconnectWallet) {
     return window.__SUPPORTME_MOCK_WALLET__.disconnectWallet();
   }
   if (!initialized) return;
@@ -133,7 +133,7 @@ export const disconnectWallet = async (): Promise<void> => {
  * "unknown", not as a mismatch.
  */
 export const getWalletNetwork = async (): Promise<{ network: string; networkPassphrase: string } | null> => {
-  if (typeof window !== 'undefined' && window.__SUPPORTME_MOCK_WALLET__?.getNetwork) {
+  if (process.env.NEXT_PUBLIC_E2E === 'true' && typeof window !== 'undefined' && window.__SUPPORTME_MOCK_WALLET__?.getNetwork) {
     return window.__SUPPORTME_MOCK_WALLET__.getNetwork();
   }
   if (!initialized) return null;
@@ -169,7 +169,7 @@ export const signTransaction = async (
   // mismatch — otherwise the failure surfaces later as an opaque
   // "signature declined" (see lib/failures.ts).
   await assertWalletOnTestnet();
-  if (typeof window !== 'undefined' && window.__SUPPORTME_MOCK_WALLET__?.signTransaction) {
+  if (process.env.NEXT_PUBLIC_E2E === 'true' && typeof window !== 'undefined' && window.__SUPPORTME_MOCK_WALLET__?.signTransaction) {
     return window.__SUPPORTME_MOCK_WALLET__.signTransaction(xdr, address);
   }
   ensureInit();
@@ -186,7 +186,7 @@ export const signTransaction = async (
 // Signs an arbitrary text message (used for the wallet sign-in challenge).
 // Returns the base64-encoded signed message.
 export const signMessage = async (message: string, address: string): Promise<string> => {
-  if (typeof window !== 'undefined' && window.__SUPPORTME_MOCK_WALLET__?.signMessage) {
+  if (process.env.NEXT_PUBLIC_E2E === 'true' && typeof window !== 'undefined' && window.__SUPPORTME_MOCK_WALLET__?.signMessage) {
     return window.__SUPPORTME_MOCK_WALLET__.signMessage(message, address);
   }
   ensureInit();
@@ -206,7 +206,7 @@ export const signMessage = async (message: string, address: string): Promise<str
  * a changeTrust operation. The asset issuer must be configured in env vars.
  */
 export const addTrustline = async (assetCode: string, address: string): Promise<string> => {
-  if (typeof window !== 'undefined' && window.__SUPPORTME_MOCK_WALLET__?.signTransaction) {
+  if (process.env.NEXT_PUBLIC_E2E === 'true' && typeof window !== 'undefined' && window.__SUPPORTME_MOCK_WALLET__?.signTransaction) {
     // Mock implementation would go here
     throw new Error('Mock trustline not implemented');
   }

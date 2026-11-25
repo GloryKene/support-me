@@ -3,6 +3,7 @@
 import { useRef } from 'react';
 import { QRCodeCanvas, QRCodeSVG } from 'qrcode.react';
 import { notify } from '@/lib/notify';
+import { downloadBlob } from '@/lib/download';
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://support-mee.vercel.app';
 
@@ -24,15 +25,6 @@ const DOWNLOAD_SIZE = 1024;
 // images stay scannable wherever they're placed, not just inside this card.
 const QR_COLORS = { fgColor: '#000000', bgColor: '#FFFFFF' } as const;
 const QR_MARGIN = 4;
-
-function triggerDownload(href: string, filename: string) {
-  const a = document.createElement('a');
-  a.href = href;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-}
 
 function canvasToPngFile(canvas: HTMLCanvasElement, filename: string): Promise<File | null> {
   return new Promise((resolve) => {
@@ -64,9 +56,7 @@ export function QrCodeCard({ creator }: QrCodeCardProps) {
         notify.error('Could not generate the QR code image.');
         return;
       }
-      const url = URL.createObjectURL(blob);
-      triggerDownload(url, pngFilename);
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, pngFilename);
     }, 'image/png');
   };
 
@@ -81,9 +71,7 @@ export function QrCodeCard({ creator }: QrCodeCardProps) {
     }
     const serialized = new XMLSerializer().serializeToString(svg);
     const blob = new Blob([serialized], { type: 'image/svg+xml' });
-    const url = URL.createObjectURL(blob);
-    triggerDownload(url, `${creator.username}-supportme-qr.svg`);
-    URL.revokeObjectURL(url);
+    downloadBlob(blob, `${creator.username}-supportme-qr.svg`);
   };
 
   const copyProfileLink = async () => {

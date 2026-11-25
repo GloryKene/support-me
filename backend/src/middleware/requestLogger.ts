@@ -20,6 +20,17 @@ function levelForStatus(status: number): LogLevel {
 }
 
 /**
+ * Extracts the full request path with any query string stripped (#535).
+ * Prefers `req.originalUrl` so mounted sub-routers do not truncate the path,
+ * falling back to `req.url` or `req.path`.
+ */
+export function getRequestPath(req: Request): string {
+  const raw = req.originalUrl || req.url || req.path || "";
+  const queryIndex = raw.indexOf("?");
+  return queryIndex === -1 ? raw : raw.slice(0, queryIndex);
+}
+
+/**
  * Structured (JSON) request logging middleware.
  *
  * - Attaches a `requestId` to every request — honouring an inbound
@@ -36,6 +47,9 @@ export function requestLogger(req: Request, res: Response, next: NextFunction) {
 
   res.setHeader("X-Request-Id", req.requestId);
 
+  // Capture the full request path at middleware entry before mounted routers
+  // rewrite req.url / req.path to router-relative sub-paths (#535).
+  const path = getRequestPath(req);
   const startedAt = process.hrtime.bigint();
 
   res.on("finish", () => {
@@ -44,7 +58,7 @@ export function requestLogger(req: Request, res: Response, next: NextFunction) {
     log(levelForStatus(res.statusCode), "request completed", {
       requestId: req.requestId,
       method: req.method,
-      path: req.path,
+      path,
       status: res.statusCode,
       durationMs: Math.round(durationMs * 10) / 10,
     });

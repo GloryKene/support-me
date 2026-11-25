@@ -14,7 +14,6 @@ export interface DonationEvent {
   currency?: string;
   donationId?: number;
   subscriptionId?: number;
-  feeAmount?: string;
 }
 
 export interface SubscriptionCreatedEvent {

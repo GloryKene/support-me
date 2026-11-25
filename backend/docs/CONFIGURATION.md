@@ -14,6 +14,17 @@ after a change.
 | `NODE_ENV` | Optional. Set explicitly in deployed environments. | Unset is treated as non-production by environment checks; `production` enables strict startup validation, and `test` enables test-only behavior. |
 | `PORT` | Optional. | `4000`. |
 
+## Request body limit
+
+JSON request bodies are capped at **100kb** by the explicit
+`express.json({ limit: "100kb" })` in `backend/src/app.ts` (#519). This is a
+deliberate code constant (`JSON_BODY_LIMIT`), not the body-parser default and
+not an environment variable; changing it is a code change. A body over the cap
+returns `413` with `code: "PAYLOAD_TOO_LARGE"` and the request id, and is not
+sent to Sentry. Unsupported charsets/content encodings return `415`. The email
+webhook route uses `express.raw()` so Svix can verify the exact signed bytes
+and is unaffected by this JSON cap.
+
 ## Browser access and proxy
 
 | Variable | Required? | Default / behavior |
@@ -81,6 +92,7 @@ as well if the listener needs a non-default endpoint.
 | `EXECUTOR_SECRET_KEY` | Required for normal backend startup because the subscription executor is started with the server. | None. This operational Stellar key must be registered as the donation contract executor and funded for transaction fees. Do not reuse a user wallet or commit the secret. On testnet/futurenet a missing account is auto-funded via Friendbot at startup (#279). |
 | `SUBSCRIPTION_EXECUTOR_POLL_INTERVAL_MS` | Optional. | `60000` ms. |
 | `SUBSCRIPTION_EXECUTOR_EXPECTED_INTERVAL_MS` | Optional. | Three times the polling interval, or `180000` ms with the default poll interval. Used by executor health reporting. |
+| `SUBSCRIPTION_EXECUTOR_CLAIM_TTL_MS` | Optional. | `300000` ms. How long one backend instance's claim on a due subscription is held before another instance may take it over. This recovers charges abandoned by a crashed instance (#394); keep it comfortably above the longest possible charge attempt. |
 | `FRIENDBOT_URL` | Optional. | `https://friendbot.stellar.org`. Endpoint used to auto-fund a missing executor account on testnet/futurenet; never called on mainnet. |
 | `EXECUTOR_LOW_BALANCE_XLM` | Optional. | `0.5`. XLM balance below which `/health/executor` reports `lowBalance: true`. |
 | `GOAL_RESET_CHECK_INTERVAL_MS` | Optional. | `3600000` ms (one hour). |

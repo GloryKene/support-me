@@ -7,5 +7,6 @@ export const contentType = 'image/png';
 
 export default async function Image({ params }: { params: Promise<{ username: string }> }) {
   const { username } = await params;
-  return renderCreatorOgImage(await fetchCreatorSummary(username));
+  const { creator } = await fetchCreatorSummary(username);
+  return renderCreatorOgImage(creator);
 }

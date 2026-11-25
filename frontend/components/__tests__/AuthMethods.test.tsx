@@ -58,15 +58,31 @@ describe('AuthMethods', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
   });
 
-  it('redirects the page when Sign in with Twitter succeeds', async () => {
-    const getTwitterRedirectUrl = vi.fn().mockResolvedValue('https://twitter.com/i/oauth2/authorize?state=abc');
+  it.each(['twitter.com', 'x.com'])('redirects to %s when Twitter sign-in succeeds', async (host) => {
+    const url = `https://${host}/i/oauth2/authorize?state=abc`;
+    const getTwitterRedirectUrl = vi.fn().mockResolvedValue(url);
     mockUseAuth.mockReturnValue(authMock({ getTwitterRedirectUrl }));
 
     render(<AuthMethods />);
     fireEvent.click(screen.getByRole('button', { name: /sign in with twitter/i }));
 
     await waitFor(() => expect(getTwitterRedirectUrl).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(window.location.href).toBe('https://twitter.com/i/oauth2/authorize?state=abc'));
+    await waitFor(() => expect(window.location.href).toBe(url));
+  });
+
+  it.each([
+    'javascript:void(0)',
+    'https://twitter.com.example.org/authorize',
+    'http://twitter.com/authorize',
+  ])('rejects an unsafe Twitter redirect (%s)', async (redirectUrl) => {
+    const getTwitterRedirectUrl = vi.fn().mockResolvedValue(redirectUrl);
+    mockUseAuth.mockReturnValue(authMock({ getTwitterRedirectUrl }));
+
+    render(<AuthMethods />);
+    fireEvent.click(screen.getByRole('button', { name: /sign in with twitter/i }));
+
+    expect(await screen.findByText('Twitter sign-in failed')).toBeInTheDocument();
+    expect(window.location.href).toBe('');
   });
 
   it('shows a specific error when Twitter sign-in is not configured', async () => {

@@ -24,25 +24,25 @@ echo "=== Setting Up Allowed Tokens for Donation Contract ($DONATION_ID) ==="
 
 # 1. Native XLM SAC (deploy-asset resolves or deploys SAC)
 echo "Deploying/resolving native XLM SAC..."
-XLM_SAC=$(stellar contract asset deploy --asset native --source-account "$ADMIN_KEY" --network "$NETWORK" 2>/dev/null || echo "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC")
+XLM_SAC=$(stellar contract asset deploy --asset native --source-account "$ADMIN_KEY" --network "$NETWORK")
 echo "Native XLM SAC ID: $XLM_SAC"
 
 echo "Adding XLM SAC to donation allowlist..."
 stellar contract invoke --id "$DONATION_ID" \
   --source-account "$ADMIN_KEY" --network "$NETWORK" -- \
-  add_allowed_token --token "$XLM_SAC" || true
+  add_allowed_token --token "$XLM_SAC"
 
 # 2. Testnet USDC
 USDC_ISSUER="${USDC_ISSUER:-GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA}"
 if [ -n "$USDC_ISSUER" ]; then
   echo "Deploying/resolving USDC SAC (issuer: $USDC_ISSUER)..."
-  USDC_SAC=$(stellar contract asset deploy --asset "USDC:$USDC_ISSUER" --source-account "$ADMIN_KEY" --network "$NETWORK" 2>/dev/null || echo "")
+  USDC_SAC=$(stellar contract asset deploy --asset "USDC:$USDC_ISSUER" --source-account "$ADMIN_KEY" --network "$NETWORK")
   if [ -n "$USDC_SAC" ]; then
     echo "USDC SAC ID: $USDC_SAC"
     echo "Adding USDC SAC to donation allowlist..."
     stellar contract invoke --id "$DONATION_ID" \
       --source-account "$ADMIN_KEY" --network "$NETWORK" -- \
-      add_allowed_token --token "$USDC_SAC" || true
+      add_allowed_token --token "$USDC_SAC"
   fi
 fi
 

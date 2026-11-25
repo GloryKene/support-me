@@ -156,15 +156,6 @@ function resolveOrDeployContracts(deployer: Keypair): {
     });
   }
 
-  console.log("Deploying creator_registry contract via stellar-cli...");
-  const regOutput = execSync(
-    `stellar contract deploy --wasm "${regWasm}" --source "${deployer.secret()}" --network testnet`,
-    { encoding: "utf-8" },
-  ).trim();
-  const registryId = regOutput.split("\n").pop()!.trim();
-
-  console.log(`Deployed Creator Registry: ${registryId}`);
-
   console.log("Deploying donation contract via stellar-cli...");
   const donOutput = execSync(
     `stellar contract deploy --wasm "${donWasm}" --source "${deployer.secret()}" --network testnet`,
@@ -173,6 +164,20 @@ function resolveOrDeployContracts(deployer: Keypair): {
   const donationId = donOutput.split("\n").pop()!.trim();
 
   console.log(`Deployed Donation Contract: ${donationId}`);
+
+  // The registry has no initialize entrypoint: its constructor runs in the
+  // deploy transaction, so the admin set and donation contract are passed as
+  // constructor arguments (1-of-1 admin, no timelock).
+  console.log("Deploying creator_registry contract via stellar-cli...");
+  const regOutput = execSync(
+    `stellar contract deploy --wasm "${regWasm}" --source "${deployer.secret()}" --network testnet -- ` +
+      `--admins '["${deployer.publicKey()}"]' --threshold 1 --timelock_delay 0 ` +
+      `--donation_contract "${donationId}"`,
+    { encoding: "utf-8" },
+  ).trim();
+  const registryId = regOutput.split("\n").pop()!.trim();
+
+  console.log(`Deployed Creator Registry: ${registryId}`);
 
   return { donationId, registryId };
 }
@@ -200,16 +205,11 @@ export async function runTestnetIntegration(): Promise<void> {
   const { donationId, registryId } = resolveOrDeployContracts(admin);
 
   console.log("\n3. Initializing contracts...");
-  // Initialize donation contract
+  // Initialize donation contract. The registry needs no call here: it was
+  // configured by its constructor when it was deployed.
   await sendTransaction(admin, donationId, "initialize", [
     new Address(admin.publicKey()).toScVal(),
     new Address(registryId).toScVal(),
-  ]);
-
-  // Initialize registry contract
-  await sendTransaction(admin, registryId, "initialize", [
-    new Address(admin.publicKey()).toScVal(),
-    new Address(donationId).toScVal(),
   ]);
 
   // Set subscription executor on donation contract

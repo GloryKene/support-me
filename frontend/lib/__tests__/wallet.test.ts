@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   signTransaction,
   getWalletNetwork,
@@ -39,9 +39,23 @@ const setMockWallet = (wallet: Window['__SUPPORTME_MOCK_WALLET__']) => {
 };
 
 describe('wallet network checks', () => {
+  beforeEach(() => {
+    vi.stubEnv('NEXT_PUBLIC_E2E', 'true');
+  });
+
   afterEach(() => {
+    vi.unstubAllEnvs();
     setMockWallet(undefined);
     vi.clearAllMocks();
+  });
+
+  it('ignores the injected wallet when the E2E flag is unset', async () => {
+    vi.stubEnv('NEXT_PUBLIC_E2E', undefined);
+    const getNetwork = vi.fn().mockResolvedValue({ networkPassphrase: PUBLIC_PASSPHRASE });
+    setMockWallet({ getNetwork });
+
+    await expect(getWalletNetwork()).resolves.toBeNull();
+    expect(getNetwork).not.toHaveBeenCalled();
   });
 
   it('reports Testnet when the wallet says Testnet', async () => {

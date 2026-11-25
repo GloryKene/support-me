@@ -1,8 +1,10 @@
 const mockLog = jest.fn();
 jest.mock("../../lib/logger", () => ({ log: mockLog }));
 
-import { Request, Response } from "express";
-import { requestLogger } from "../../middleware/requestLogger";
+import express, { Request, Response, Router } from "express";
+import request from "supertest";
+import { getRequestPath, requestLogger } from "../../middleware/requestLogger";
+import { errorHandler } from "../../middleware/errorHandler";
 
 function mockReqRes(headers: Record<string, string> = {}) {
   const req = {
@@ -108,5 +110,85 @@ describe("requestLogger middleware", () => {
     expect(context).not.toHaveProperty("query");
     expect(context).not.toHaveProperty("body");
     expect(JSON.stringify(context)).not.toContain("shh");
+  });
+
+  describe("getRequestPath helper", () => {
+    it("extracts path from req.originalUrl and strips query parameters", () => {
+      const req = { originalUrl: "/api/creators/bob?tab=activity&token=123" } as Request;
+      expect(getRequestPath(req)).toBe("/api/creators/bob");
+    });
+
+    it("returns originalUrl as-is when no query string is present", () => {
+      const req = { originalUrl: "/api/creators/bob" } as Request;
+      expect(getRequestPath(req)).toBe("/api/creators/bob");
+    });
+
+    it("falls back to req.url or req.path if originalUrl is undefined", () => {
+      const reqWithUrl = { url: "/api/donations?page=1" } as Request;
+      expect(getRequestPath(reqWithUrl)).toBe("/api/donations");
+
+      const reqWithPath = { path: "/api/health" } as Request;
+      expect(getRequestPath(reqWithPath)).toBe("/api/health");
+    });
+  });
+
+  describe("mounted router integration (Issue #535)", () => {
+    it("logs the full route path when response ends in a mounted router, excluding query strings", async () => {
+      const app = express();
+      app.use(requestLogger);
+
+      const creatorRouter = Router();
+      creatorRouter.get("/bob", (_req, res) => {
+        res.status(200).json({ name: "bob" });
+      });
+      app.use("/api/creators", creatorRouter);
+
+      const response = await request(app).get("/api/creators/bob?secret=token&view=compact");
+      expect(response.status).toBe(200);
+
+      expect(mockLog).toHaveBeenCalledWith(
+        "info",
+        "request completed",
+        expect.objectContaining({
+          method: "GET",
+          path: "/api/creators/bob",
+          status: 200,
+        })
+      );
+    });
+
+    it("logs consistent full paths for both error handler and request completion on mounted routers", async () => {
+      const app = express();
+      app.use(requestLogger);
+
+      const creatorRouter = Router();
+      creatorRouter.get("/error-route", (_req, _res, next) => {
+        next(new Error("unexpected failure"));
+      });
+      app.use("/api/creators", creatorRouter);
+      app.use(errorHandler);
+
+      const response = await request(app).get("/api/creators/error-route?query=test");
+      expect(response.status).toBe(500);
+
+      // Verify errorHandler logged full path
+      expect(mockLog).toHaveBeenCalledWith(
+        "error",
+        "unhandled error",
+        expect.objectContaining({
+          path: "/api/creators/error-route",
+        })
+      );
+
+      // Verify requestLogger logged the same full path
+      expect(mockLog).toHaveBeenCalledWith(
+        "error",
+        "request completed",
+        expect.objectContaining({
+          path: "/api/creators/error-route",
+          status: 500,
+        })
+      );
+    });
   });
 });

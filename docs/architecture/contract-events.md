@@ -10,7 +10,7 @@ Historically, off-chain backend systems had to periodically poll contract state 
 
 SupportMe contracts now emit self-contained events for all key on-chain state mutations. Every event payload carries sufficient contextual data (including involved parties, token asset address, amounts, and schedule timestamps) so that indexers, listeners, and backend services can reconcile off-chain database state without making follow-up RPC queries.
 
-Between the two contracts there are 16 distinct event topics (§2). The backend's `SorobanEventListener` only reconciles the six that have a corresponding row to update in Postgres — `donated`, `subscribed`, `sub_cancelled`, `goal_upd`, `sub_failed`, and `don_rec` (§3). The remaining ten — creator registration and the admin-governance/guardrail topics — are emitted for on-chain transparency and external indexers; the listener's `processEvent` switch has no case for them and its `default` branch returns `false` without writing to the database.
+Between the two contracts there are 20 distinct event topics (§2). The backend's `SorobanEventListener` only reconciles the six that have a corresponding row to update in Postgres — `donated`, `subscribed`, `sub_cancelled`, `goal_upd`, `sub_failed`, and `don_rec` (§3). The remaining fourteen — creator registration and the admin-governance/guardrail topics — are emitted for on-chain transparency and external indexers; the listener's `processEvent` switch has no case for them and its `default` branch returns `false` without writing to the database.
 
 ```
 +---------------------+           +------------------------+
@@ -50,7 +50,6 @@ Emitted by `DonationContract::donate` and `DonationContract::charge_subscription
       pub donation_id: u32,                // Per-contract donation counter
       pub token: Address,                  // SAC address of donated token (e.g. native XLM or USDC)
       pub amount: i128,                    // Net amount transferred to the creator, in atomic units / stroops
-      pub fee_amount: i128,                // Protocol fee withheld from the gross donation, in atomic units
       pub memo: String,                    // Donor memo or "recurring"
       pub timestamp: u64,                  // Ledger timestamp
       pub subscription_id: Option<u64>,    // Set when this donation was a recurring charge, else None
@@ -83,7 +82,7 @@ Emitted by `DonationContract::subscribe` when a supporter sets up a recurring do
 ---
 
 ### 2.3. `SubscriptionCancelledEvent`
-Emitted by `DonationContract::cancel_subscription` when a supporter cancels their recurring donation and zeroes out allowance.
+Emitted by `DonationContract::cancel_subscription` when a supporter cancels their recurring donation.
 
 - **Topic Schema**: `["sub_cancelled", supporter: Address, creator: Address]`
 - **Value Schema**:
@@ -96,6 +95,32 @@ Emitted by `DonationContract::cancel_subscription` when a supporter cancels thei
   ```
 - **Indexing & Filtering**:
   Indexed by both `supporter` and `creator`. Enables the backend to immediately reconcile database state (`active = false`) upon event ingestion without polling.
+
+---
+
+### `SubscriptionAllowanceEvent`
+
+Cancellation subtracts the cancelled subscription's amount from the shared SAC
+allowance, clamped at zero. When the remainder is positive, the contract
+re-approves it through the cancellation ledger plus the cancelled subscription's
+TTL bump. This can shorten or lengthen the previous expiry.
+
+- **Topic Schema**: `["sub_allowance_updated", supporter: Address, token: Address]`
+- **Value Schema**:
+  ```rust
+  pub struct SubscriptionAllowanceEvent {
+      #[topic]
+      pub supporter: Address,
+      #[topic]
+      pub token: Address,
+      pub subscription_id: u64,
+      pub live_until_ledger: u32, // Inclusive expiration ledger
+  }
+  ```
+- **Client handling**: If the replacement expiry falls before the supporter's
+  intended approval window, prompt them to re-approve the allowance through
+  their desired ledger. A zero remainder is revoked and emits no
+  `sub_allowance_updated` event.
 
 ---
 
@@ -179,10 +204,11 @@ Emitted when an admin proposes a high-risk administrative action (e.g. rotating 
 - **Value Schema**:
   ```rust
   pub struct ProposalCreatedEvent {
-      pub proposal_id: u64,   // Newly created proposal's ID
+      pub proposal_id: u64,    // Newly created proposal's ID
       #[topic]
-      pub proposer: Address,  // Admin who created the proposal
+      pub proposer: Address,   // Admin who created the proposal
       pub eta: u64,            // Ledger timestamp after which the proposal becomes executable
+      pub action: AdminAction, // The action this proposal will apply
   }
   ```
 
@@ -295,6 +321,57 @@ Emitted whenever the address authorized to call `charge_subscription` changes, w
 
 ---
 
+### Admin Set & Registry Events (`creator-registry` and `donation`)
+
+Emitted when an executed `AdminAction` changes the admin set, the signer threshold, or the cross-contract address. Both contracts emit identical shapes. In `donation` the repointed address is the creator registry; in `creator-registry` it is the donation contract (the field is `new_registry` in both).
+
+#### 2.17. `AdminAddedEvent`
+- **Topic Schema**: `["admin_added", admin: Address]`
+- **Value Schema**:
+  ```rust
+  pub struct AdminAddedEvent {
+      #[topic]
+      pub admin: Address,       // Newly added admin
+      pub total_admins: u32,    // Admin count after the change
+  }
+  ```
+
+#### 2.18. `AdminRemovedEvent`
+- **Topic Schema**: `["admin_removed", admin: Address]`
+- **Value Schema**:
+  ```rust
+  pub struct AdminRemovedEvent {
+      #[topic]
+      pub admin: Address,       // Removed admin
+      pub total_admins: u32,    // Admin count after the change
+  }
+  ```
+
+#### 2.19. `ThresholdChangedEvent`
+- **Topic Schema**: `["threshold_chg"]` (no topic fields)
+- **Value Schema**:
+  ```rust
+  pub struct ThresholdChangedEvent {
+      pub old_threshold: u32,
+      pub new_threshold: u32,
+  }
+  ```
+
+#### 2.20. `RegistryChangedEvent`
+Also emitted by the registry's legacy single-admin `set_donation_contract`.
+
+- **Topic Schema**: `["registry_chg", new_registry: Address]`
+- **Value Schema**:
+  ```rust
+  pub struct RegistryChangedEvent {
+      pub old_registry: Option<Address>,   // None if never set
+      #[topic]
+      pub new_registry: Address,
+  }
+  ```
+
+---
+
 ## 3. Backend Event Consumption & Reconciliation
 
 The backend's `SorobanEventListener` (`backend/src/services/sorobanEventListener.ts`) consumes these events using Soroban RPC cursor pagination.
@@ -355,7 +432,7 @@ case "sub_failed": {
 ```
 
 ### 3.5. Unreconciled Events: Creator Registration and Admin Governance/Guardrails
-`created`, the four proposal-lifecycle topics (`prop_created`, `prop_approved`, `prop_exec`, `prop_cancelled`), and the five guardrail-change topics (`allow_tok`, `min_don`, `max_don`, `pause_chg`, `exec_chg`) are emitted on-chain but have no corresponding `case` in `processEvent`'s `switch` — they fall through to `default` and are neither published on `eventBus` nor written to Postgres. There is no `AdminProposal` table in `schema.prisma`, so that state currently has no off-chain home to reconcile into; a creator's registration is instead captured by the backend's own `POST`-time username write, not by observing `created`.
+`created`, the four admin-set/registry topics (`admin_added`, `admin_removed`, `threshold_chg`, `registry_chg`), the four proposal-lifecycle topics (`prop_created`, `prop_approved`, `prop_exec`, `prop_cancelled`), and the five guardrail-change topics (`allow_tok`, `min_don`, `max_don`, `pause_chg`, `exec_chg`) are emitted on-chain but have no corresponding `case` in `processEvent`'s `switch` — they fall through to `default` and are neither published on `eventBus` nor written to Postgres. There is no `AdminProposal` table in `schema.prisma`, so that state currently has no off-chain home to reconcile into; a creator's registration is instead captured by the backend's own `POST`-time username write, not by observing `created`.
 
 ### 3.6. Real-Time Dashboard Updates (SSE)
 All processed events are published onto `eventBus` and broadcast via Server-Sent Events at `GET /api/events` to any open creator dashboards or activity monitors.

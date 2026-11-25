@@ -22,6 +22,7 @@ export const leaderboardQuerySchema = z.object({
   // and 1 USDC are not the same value), so a single currency is ranked at a
   // time — defaulting to XLM, the platform's default asset.
   currency: assetCode.optional().default("XLM"),
+  period: z.enum(["all", "month", "week"]).optional().default("all"),
   page: z.coerce.number().int().positive().optional().default(1),
   limit: z.coerce.number().int().positive().max(100).optional().default(20),
 });

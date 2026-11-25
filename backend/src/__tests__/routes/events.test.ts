@@ -1,15 +1,20 @@
 jest.mock("../../prisma", () => ({
   __esModule: true,
-  default: {},
+  default: {
+    user: { findUnique: jest.fn() },
+  },
 }));
 
 import { IncomingMessage } from "http";
 import { Socket } from "net";
 import request from "supertest";
 import app from "../../app";
+import prisma from "../../prisma";
 import { eventBus, DONATION_EVENT, DonationEvent } from "../../services/eventBus";
 import { resetEventsConnections, setEventsConnectionLimits } from "../../routes/events";
-import { generateToken } from "../../middleware/auth";
+import { generateToken, clearDeletedAtCache } from "../../middleware/auth";
+
+const mockedPrisma = prisma as unknown as { user: { findUnique: jest.Mock } };
 
 /**
  * An SSE connection never completes, so a normal `await request(app).get(...)`
@@ -94,12 +99,19 @@ describe("GET /api/events", () => {
     return stream;
   };
 
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockedPrisma.user.findUnique.mockResolvedValue({ deletedAt: null });
+    clearDeletedAtCache();
+  });
+
   afterEach(() => {
     // Abort any stream a failing test left open, so its 30s heartbeat
     // interval can't keep the process alive.
     for (const stream of open.splice(0)) stream.close();
     eventBus.removeAllListeners();
     resetEventsConnections();
+    clearDeletedAtCache();
   });
 
   it("returns SSE headers and accepts connections", async () => {
@@ -281,11 +293,13 @@ describe("GET /api/events", () => {
     expect(eventA).toBeDefined();
   });
 
-  it("includes private fields (memo) when authenticated as the creator (#370)", async () => {
+  it("includes private fields (memo) when authenticated as the creator via Authorization header (#370, #495)", async () => {
     const creatorWallet = "GCREATORAUTH111111111111111111111111111111111111111111";
     const token = generateToken(42, creatorWallet);
 
-    const stream = await connect(`?creator=${creatorWallet}&token=${token}`);
+    const stream = await connect(`?creator=${creatorWallet}`, {
+      authorization: `Bearer ${token}`,
+    });
 
     eventBus.emit(DONATION_EVENT, {
       donor: "GDONOR",
@@ -304,6 +318,114 @@ describe("GET /api/events", () => {
     const dataLine = lines.find((l) => l.startsWith("data:"));
     const parsed = JSON.parse(dataLine?.replace("data: ", "") || "{}");
     expect(parsed.memo).toBe("Secret memo for creator");
+  });
+
+  it("includes private fields (memo) when authenticated as the creator via httpOnly cookie (#495)", async () => {
+    const creatorWallet = "GCREATORCOOKIE1111111111111111111111111111111111111111";
+    const token = generateToken(43, creatorWallet);
+
+    const stream = await connect(`?creator=${creatorWallet}`, {
+      cookie: `token=${token}`,
+    });
+
+    eventBus.emit(DONATION_EVENT, {
+      donor: "GDONOR",
+      creator: creatorWallet,
+      amount: "5000",
+      memo: "Secret memo for cookie creator",
+      timestamp: Date.now(),
+      ledger: 200,
+      txHash: "tx-cookie-auth",
+    });
+    await delay(50);
+
+    const eventData = stream.chunks.find((c) => c.includes("tx-cookie-auth"));
+    expect(eventData).toBeDefined();
+    const lines = eventData?.split("\n") || [];
+    const dataLine = lines.find((l) => l.startsWith("data:"));
+    const parsed = JSON.parse(dataLine?.replace("data: ", "") || "{}");
+    expect(parsed.memo).toBe("Secret memo for cookie creator");
+  });
+
+  it("ignores session token in ?token= query parameter and strips private fields (#495)", async () => {
+    const creatorWallet = "GCREATORQUERY11111111111111111111111111111111111111111";
+    const token = generateToken(44, creatorWallet);
+
+    const stream = await connect(`?creator=${creatorWallet}&token=${token}`);
+
+    eventBus.emit(DONATION_EVENT, {
+      donor: "GDONOR",
+      creator: creatorWallet,
+      amount: "5000",
+      memo: "Secret memo for query token",
+      timestamp: Date.now(),
+      ledger: 200,
+      txHash: "tx-query-token",
+    });
+    await delay(50);
+
+    const eventData = stream.chunks.find((c) => c.includes("tx-query-token"));
+    expect(eventData).toBeDefined();
+    const lines = eventData?.split("\n") || [];
+    const dataLine = lines.find((l) => l.startsWith("data:"));
+    const parsed = JSON.parse(dataLine?.replace("data: ", "") || "{}");
+    expect(parsed.memo).toBeUndefined();
+  });
+
+  it("prevents a soft-deleted account from opening an authenticated stream via Authorization header (#495)", async () => {
+    const creatorWallet = "GCREATORDELETED111111111111111111111111111111111111111";
+    const token = generateToken(45, creatorWallet);
+    mockedPrisma.user.findUnique.mockResolvedValue({ deletedAt: new Date() });
+
+    const stream = await connect(`?creator=${creatorWallet}`, {
+      authorization: `Bearer ${token}`,
+    });
+
+    eventBus.emit(DONATION_EVENT, {
+      donor: "GDONOR",
+      creator: creatorWallet,
+      amount: "5000",
+      memo: "Secret memo should be stripped for deleted user",
+      timestamp: Date.now(),
+      ledger: 200,
+      txHash: "tx-deleted-auth",
+    });
+    await delay(50);
+
+    const eventData = stream.chunks.find((c) => c.includes("tx-deleted-auth"));
+    expect(eventData).toBeDefined();
+    const lines = eventData?.split("\n") || [];
+    const dataLine = lines.find((l) => l.startsWith("data:"));
+    const parsed = JSON.parse(dataLine?.replace("data: ", "") || "{}");
+    expect(parsed.memo).toBeUndefined();
+  });
+
+  it("prevents a soft-deleted account from opening an authenticated stream via cookie (#495)", async () => {
+    const creatorWallet = "GCREATORDELETEDCOOKIE111111111111111111111111111111111";
+    const token = generateToken(46, creatorWallet);
+    mockedPrisma.user.findUnique.mockResolvedValue({ deletedAt: new Date() });
+
+    const stream = await connect(`?creator=${creatorWallet}`, {
+      cookie: `token=${token}`,
+    });
+
+    eventBus.emit(DONATION_EVENT, {
+      donor: "GDONOR",
+      creator: creatorWallet,
+      amount: "5000",
+      memo: "Secret memo should be stripped for deleted cookie user",
+      timestamp: Date.now(),
+      ledger: 200,
+      txHash: "tx-deleted-cookie",
+    });
+    await delay(50);
+
+    const eventData = stream.chunks.find((c) => c.includes("tx-deleted-cookie"));
+    expect(eventData).toBeDefined();
+    const lines = eventData?.split("\n") || [];
+    const dataLine = lines.find((l) => l.startsWith("data:"));
+    const parsed = JSON.parse(dataLine?.replace("data: ", "") || "{}");
+    expect(parsed.memo).toBeUndefined();
   });
 
   it("refuses connections beyond the connection cap with 429 (#370)", async () => {

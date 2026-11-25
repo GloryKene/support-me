@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useId } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { HugeiconsIcon } from '@hugeicons/react';
@@ -20,9 +20,10 @@ import { TestnetBadge } from '@/components/TestnetBadge';
 import { useAuth } from '@/context/AuthContext';
 import { API_URL } from '@/lib/api';
 import { explorerAccountUrl } from '@/lib/stellarNetwork';
+import { availableAssetCodes, type AssetCode } from '@/lib/assets';
 
 export type LeaderboardType = 'creators' | 'supporters';
-export type CurrencyFilter = 'XLM' | 'USDC' | 'EURC';
+export type CurrencyFilter = AssetCode;
 export type TimeFilter = 'all' | 'month' | 'week';
 
 export interface CreatorLeaderboardEntry {
@@ -66,7 +67,7 @@ function sliceAddress(addr: string): string {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
-const CURRENCIES: CurrencyFilter[] = ['XLM', 'USDC', 'EURC'];
+const CURRENCIES: CurrencyFilter[] = availableAssetCodes();
 const TIMEFRAMES: { id: TimeFilter; label: string }[] = [
   { id: 'all', label: 'All-Time' },
   { id: 'month', label: 'This Month' },
@@ -82,15 +83,13 @@ export default function LeaderboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const creatorsTabId = useId();
-  const supportersTabId = useId();
 
   const fetchLeaderboard = async () => {
     setLoading(true);
     setError(null);
     try {
       const res = await fetch(
-        `${API_URL}/api/creators/leaderboard?type=${type}&currency=${currency}&page=1&limit=50`
+        `${API_URL}/api/creators/leaderboard?type=${type}&currency=${currency}&period=${timeframe}&page=1&limit=50`
       );
       if (!res.ok) {
         throw new Error('Failed to load leaderboard data.');
@@ -107,7 +106,7 @@ export default function LeaderboardPage() {
 
   useEffect(() => {
     void fetchLeaderboard();
-  }, [type, currency]);
+  }, [type, currency, timeframe]);
 
   const topThree = data.slice(0, 3);
   const restEntries = data.slice(3);
@@ -171,20 +170,18 @@ export default function LeaderboardPage() {
           </p>
         </header>
 
-        {/* Controls: Type Tabs, Currency & Timeframe Filters */}
+        {/* Controls: View, Currency & Timeframe Filters */}
         <section aria-label="Leaderboard Filters" className="card-brutal bg-card p-4 sm:p-6 space-y-4">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            {/* Type Switcher Tabs */}
+            {/* View Switcher */}
             <div
-              role="tablist"
+              role="group"
               aria-label="Leaderboard View Type"
               className="inline-flex bg-background border-2 border-ink rounded-xl p-1 gap-1"
             >
               <button
-                id={creatorsTabId}
-                role="tab"
                 type="button"
-                aria-selected={type === 'creators'}
+                aria-pressed={type === 'creators'}
                 onClick={() => setType('creators')}
                 className={`flex items-center gap-2 px-4 py-2 font-bold text-sm rounded-lg transition-all min-h-[44px] ${
                   type === 'creators'
@@ -196,10 +193,8 @@ export default function LeaderboardPage() {
                 Top Creators
               </button>
               <button
-                id={supportersTabId}
-                role="tab"
                 type="button"
-                aria-selected={type === 'supporters'}
+                aria-pressed={type === 'supporters'}
                 onClick={() => setType('supporters')}
                 className={`flex items-center gap-2 px-4 py-2 font-bold text-sm rounded-lg transition-all min-h-[44px] ${
                   type === 'supporters'

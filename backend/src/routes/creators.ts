@@ -23,6 +23,7 @@ import { challenges } from "./auth";
 import { verifyWalletOwnership } from "../services/walletProof";
 import { TtlCache } from "../services/ttlCache";
 import { toAmount, MoneyValue } from "../lib/money";
+import { toPublicCreator } from "../lib/publicCreator";
 import { getCreatorStats } from "../services/creatorStats";
 
 const router = Router();
@@ -30,7 +31,8 @@ const router = Router();
 // Cache creator profile lookups by username with a 5-minute TTL.
 // Profiles change infrequently, so this reduces DB load while staying fresh.
 // Exported so tests can reset it between cases.
-export const creatorProfileCache = new TtlCache<Creator>(5 * 60 * 1000);
+export const creatorProfileCache = new TtlCache<Creator>(5 * 60 * 1000, 500);
+creatorProfileCache.startSweeping();
 
 export function formatCreator<T extends { presetAmounts?: unknown }>(creator: T): T {
   if (!creator) return creator;
@@ -63,7 +65,8 @@ interface SupporterLeaderboardEntry extends LeaderboardEntry {
 // cache/Redis for a single-instance API, while still being fresh within a
 // donation's-eye-view of "shortly after it happened". Exported so tests
 // can reset it between cases instead of sharing state across the file.
-export const leaderboardCache = new TtlCache<{ entries: LeaderboardEntry[]; total: number }>(30_000);
+export const leaderboardCache = new TtlCache<{ entries: LeaderboardEntry[]; total: number }>(30_000, 200);
+leaderboardCache.startSweeping();
 
 const WALLET_TAKEN_MESSAGE = "This wallet address is already linked to another creator profile";
 
@@ -182,7 +185,10 @@ router.get(
     const total = await prisma.creator.count({ where });
 
     return res.json({
-      items: creators.map(formatCreator),
+      items: creators.map((creator) => ({
+        ...toPublicCreator(creator),
+        _count: { donations: creator._count.donations },
+      })),
       pagination: {
         page,
         limit,
@@ -236,19 +242,35 @@ router.get(
   "/leaderboard",
   validate({ query: leaderboardQuerySchema }),
   asyncHandler(async (req, res) => {
-    const { type, currency, page, limit } = req.query as unknown as {
+    const { type, currency, period, page, limit } = req.query as unknown as {
       type: "creators" | "supporters";
       currency: string;
+      period: "all" | "month" | "week";
       page: number;
       limit: number;
     };
 
-    const cacheKey = `${type}:${currency}`;
+    const now = new Date();
+    let periodStart: Date | undefined;
+    if (period === "month") {
+      periodStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    } else if (period === "week") {
+      periodStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+      const daysSinceMonday = (periodStart.getUTCDay() + 6) % 7;
+      periodStart.setUTCDate(periodStart.getUTCDate() - daysSinceMonday);
+    }
+
+    const cacheKey = `${type}:${currency}:${periodStart?.toISOString() ?? "all"}`;
     const { entries: allRanked, total } = await leaderboardCache.getOrSet(cacheKey, async () => {
+      const donationWhere = {
+        currency,
+        ...(periodStart ? { createdAt: { gte: periodStart } } : {}),
+      };
+
       if (type === "creators") {
         const grouped = await prisma.donation.groupBy({
           by: ["creatorId"],
-          where: { currency, creator: { walletAddress: { not: null } } },
+          where: { ...donationWhere, creator: { walletAddress: { not: null } } },
           _sum: { amount: true },
           _count: { _all: true },
           orderBy: { _sum: { amount: "desc" } },
@@ -274,7 +296,7 @@ router.get(
 
       const grouped = await prisma.donation.groupBy({
         by: ["senderAddress"],
-        where: { currency },
+        where: donationWhere,
         _sum: { amount: true },
         _count: { _all: true },
         orderBy: { _sum: { amount: "desc" } },
@@ -317,7 +339,7 @@ router.get(
         return profile;
       });
 
-      return res.json(formatCreator(creator));
+      return res.json(toPublicCreator(creator));
     } catch (error) {
       // If cache fails, fall back to direct DB read
       if (error instanceof NotFoundError) {
@@ -331,7 +353,7 @@ router.get(
         throw new NotFoundError("Creator not found");
       }
 
-      return res.json(formatCreator(creator));
+      return res.json(toPublicCreator(creator));
     }
   })
 );

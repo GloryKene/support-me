@@ -18,7 +18,7 @@ vi.mock('@/lib/network', () => ({
 
 describe('AccountDataSection deletion', () => {
   beforeEach(() => {
-    logout.mockReset();
+    logout.mockReset().mockResolvedValue(undefined);
     vi.mocked(fetchWithRetry).mockReset().mockResolvedValue(new Response('{}', { status: 200 }));
   });
 

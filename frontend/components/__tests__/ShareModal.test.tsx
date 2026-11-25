@@ -1,3 +1,4 @@
+import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { forwardRef, useState } from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -64,32 +65,39 @@ describe('ShareModal', () => {
     expect(screen.getByTestId('qr-svg')).toBeInTheDocument();
   });
 
-  it('allows user to choose between Copy Link, QR Code, and Both views', () => {
+  it('allows keyboard users to choose between Copy Link, QR Code, and Both views', async () => {
     render(<ShareModal creator={creator} onClose={onClose} />);
 
     const bothBtn = screen.getByRole('button', { name: 'Both' });
     const linkBtn = screen.getByRole('button', { name: /copy link/i });
     const qrBtn = screen.getByRole('button', { name: /qr code/i });
 
-    // Toggle buttons expose state via aria-pressed instead of an incomplete tab pattern.
     expect(bothBtn).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByRole('tab')).not.toBeInTheDocument();
 
     // Switch to Copy Link only
-    fireEvent.click(linkBtn);
+    bothBtn.focus();
+    await userEvent.tab();
+    expect(linkBtn).toHaveFocus();
+    await userEvent.keyboard('{Enter}');
     expect(linkBtn).toHaveAttribute('aria-pressed', 'true');
     expect(bothBtn).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByTestId('share-link-section')).toBeInTheDocument();
     expect(screen.queryByTestId('share-qr-section')).not.toBeInTheDocument();
 
     // Switch to QR Code only
-    fireEvent.click(qrBtn);
+    await userEvent.tab();
+    expect(qrBtn).toHaveFocus();
+    await userEvent.keyboard(' ');
     expect(qrBtn).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByTestId('share-link-section')).not.toBeInTheDocument();
     expect(screen.getByTestId('share-qr-section')).toBeInTheDocument();
 
     // Switch back to Both
-    fireEvent.click(bothBtn);
+    await userEvent.tab({ shift: true });
+    await userEvent.tab({ shift: true });
+    expect(bothBtn).toHaveFocus();
+    await userEvent.keyboard('{Enter}');
     expect(bothBtn).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByTestId('share-link-section')).toBeInTheDocument();
     expect(screen.getByTestId('share-qr-section')).toBeInTheDocument();

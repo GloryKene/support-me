@@ -1,4 +1,5 @@
 import {
+  isCheckConstraintViolation,
   sorobanEventListener,
   RawEvent,
 } from "../../services/sorobanEventListener";
@@ -120,6 +121,28 @@ function donatedRawEvent(overrides: Partial<RawEvent> = {}): RawEvent {
   };
 }
 
+describe("isCheckConstraintViolation", () => {
+  it("recognizes the raw-SQL and ORM-wrapped forms of SQLSTATE 23514", () => {
+    expect(isCheckConstraintViolation({ code: "23514" })).toBe(true);
+    expect(isCheckConstraintViolation({ code: "P2010", meta: { code: "23514" } })).toBe(true);
+    expect(
+      isCheckConstraintViolation({
+        message:
+          'Error occurred during query execution: PostgresError { code: "23514", message: "violates check constraint" }',
+      })
+    ).toBe(true);
+    expect(
+      isCheckConstraintViolation({ code: "P2004", meta: { database_error: 'violates check constraint "x"' } })
+    ).toBe(true);
+  });
+
+  it("does not mistake other Prisma failures for a CHECK violation", () => {
+    expect(isCheckConstraintViolation({ code: "P2002" })).toBe(false);
+    expect(isCheckConstraintViolation(new Error("connection reset"))).toBe(false);
+    expect(isCheckConstraintViolation(null)).toBe(false);
+  });
+});
+
 describe("SorobanEventListener event processing & reconciliation", () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -147,7 +170,6 @@ describe("SorobanEventListener event processing & reconciliation", () => {
         timestamp: 1713182400n,
         token: "CUSDC...",
         donation_id: 10n,
-        fee_amount: 0n,
         subscription_id: null,
       }),
     };
@@ -166,7 +188,6 @@ describe("SorobanEventListener event processing & reconciliation", () => {
       ledger: 1050,
       txHash: "tx_hash_donated_123",
       donationId: 10,
-      feeAmount: "0",
     });
 
     eventBus.off(DONATION_EVENT, handler);
@@ -194,7 +215,6 @@ describe("SorobanEventListener event processing & reconciliation", () => {
         timestamp: 1713182500n,
         token: "CUSDC...",
         donation_id: 11n,
-        fee_amount: 0n,
         subscription_id: 42n,
       }),
     };

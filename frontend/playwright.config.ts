@@ -26,10 +26,19 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
   ],
-  webServer: {
-    command: 'npx next dev -p 3000',
-    url: 'http://localhost:3000',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120 * 1000,
-  },
+  webServer: [
+    {
+      command: 'node e2e/fixtures/creator-api.mjs',
+      url: 'http://127.0.0.1:4400',
+    },
+    {
+      command: 'npx next dev -p 3000',
+      url: 'http://localhost:3000',
+      env: {
+        NEXT_PUBLIC_E2E: 'true',
+        NEXT_PUBLIC_API_URL: 'http://127.0.0.1:4400',
+      },
+      timeout: 120 * 1000,
+    },
+  ],
 });

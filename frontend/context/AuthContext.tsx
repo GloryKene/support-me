@@ -37,10 +37,19 @@ interface AuthContextType {
   completeTwitterLogin: (code: string, state: string) => Promise<LoginResult>;
   requestMagicLink: (email: string) => Promise<void>;
   verifyMagicLink: (token: string) => Promise<LoginResult>;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+// Error responses from the auth proxy are not always JSON: a 502, a
+// rate-limit page or an HTML error page makes res.json() throw a
+// SyntaxError ("Unexpected token <"), which would replace the message the
+// caller was meant to see. Read the body defensively and fall back.
+async function readError(res: Response, fallback: string): Promise<string> {
+  const body = (await res.json().catch(() => ({}))) as { error?: unknown };
+  return typeof body.error === 'string' && body.error ? body.error : fallback;
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -55,10 +64,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const syncSessionFromStorage = () => {
       const savedToken = localStorage.getItem('authToken');
       const savedUser = localStorage.getItem('authUser');
-      if (savedToken && savedUser) {
+
+      // The session token lives in an httpOnly cookie (#366), so it is not
+      // (and must not be) persisted in localStorage. The user profile is the
+      // only piece we keep client-side, so a reload must restore the session
+      // from `authUser` alone — requiring `authToken` here was the regression
+      // that dropped every signed-in session on refresh.
+      if (savedUser) {
         try {
-          setToken(savedToken);
-          setUser(JSON.parse(savedUser));
+          const parsed = JSON.parse(savedUser);
+          if (!isStoredUser(parsed)) throw new Error('invalid user');
+          setUser(parsed);
+          setToken(savedToken && savedToken.length > 0 ? savedToken : null);
         } catch {
           // Clear invalid stored data
           localStorage.removeItem('authToken');
@@ -67,6 +84,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(null);
         }
         return;
+      }
+
+      // A stray token without a user profile is not a usable session.
+      if (savedToken) {
+        localStorage.removeItem('authToken');
       }
       setToken(null);
       setUser(null);
@@ -122,8 +144,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       credentials: 'include',
     });
     if (!challengeRes.ok) {
-      const error = await challengeRes.json();
-      throw new Error(error.error || 'Failed to start sign-in challenge');
+      throw new Error(await readError(challengeRes, 'Failed to start sign-in challenge'));
     }
     const { message } = await challengeRes.json();
 
@@ -136,8 +157,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       credentials: 'include',
     });
     if (!verifyRes.ok) {
-      const error = await verifyRes.json();
-      throw new Error(error.error || 'Sign-in verification failed');
+      throw new Error(await readError(verifyRes, 'Sign-in verification failed'));
     }
     const data: LoginResult = await verifyRes.json();
 
@@ -149,8 +169,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       credentials: 'include',
     });
     if (!res.ok) {
-      const error = await res.json();
-      throw new Error(error.error || 'Failed to start Twitter sign-in');
+      throw new Error(await readError(res, 'Failed to start Twitter sign-in'));
     }
     const { redirectUrl } = await res.json();
     return redirectUrl;
@@ -162,8 +181,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       credentials: 'include',
     });
     if (!res.ok) {
-      const error = await res.json();
-      throw new Error(error.error || 'Twitter sign-in failed');
+      throw new Error(await readError(res, 'Twitter sign-in failed'));
     }
     const data: LoginResult = await res.json();
 
@@ -178,8 +196,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       credentials: 'include',
     });
     if (!res.ok) {
-      const error = await res.json();
-      throw new Error(error.error || 'Failed to send magic link');
+      throw new Error(await readError(res, 'Failed to send magic link'));
     }
   };
 
@@ -191,29 +208,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       credentials: 'include',
     });
     if (!res.ok) {
-      const error = await res.json();
-      throw new Error(error.error || 'This magic link is invalid or has expired');
+      throw new Error(await readError(res, 'This magic link is invalid or has expired'));
     }
     const data: LoginResult = await res.json();
 
     return persistSession(data);
   };
 
-  const logout = () => {
+  const logout = async () => {
+    const res = await fetch(`${API_URL}/api/auth/logout`, {
+      method: 'POST',
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      throw new Error('The server could not end your session.');
+    }
+
     setUser(null);
     setToken(null);
     localStorage.removeItem('authToken');
     localStorage.removeItem('authUser');
-    try {
-      const p = fetch(`${API_URL}/api/auth/logout`, {
-        method: 'POST',
-        credentials: 'include',
-      });
-      if (p && typeof p.catch === 'function') {
-        p.catch(() => {});
-      }
-    } catch {}
-    disconnectWallet().catch(() => {});
+    void disconnectWallet().catch(() => {});
   };
 
   return (

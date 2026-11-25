@@ -6,6 +6,7 @@ import { useAuth } from '@/context/AuthContext';
 import { API_URL } from '@/lib/api';
 import { fetchWithRetry, isNetworkError } from '@/lib/network';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { downloadBlob } from '@/lib/download';
 
 /**
  * Settings → "Your data": GDPR-style export (JSON download) and deletion
@@ -38,14 +39,7 @@ export function AccountDataSection() {
       const filename =
         filenameMatch?.[1] || `supportme-export-${new Date().toISOString().slice(0, 10)}.json`;
 
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, filename);
 
       notify.success('Export downloaded', {
         description: 'A JSON file with your profile, donations, subscriptions and withdrawals.',
@@ -78,7 +72,9 @@ export function AccountDataSection() {
       });
       setConfirming(false);
       setConfirmText('');
-      logout();
+      await logout().catch(() => {
+        notify.error('Could not sign out', 'Use Sign Out in the account menu to try again.');
+      });
     } catch (err) {
       if (isNetworkError(err)) return;
       notify.error('Could not delete your account', err);

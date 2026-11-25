@@ -673,13 +673,11 @@ export interface CancelSubscriptionParams {
 
 /**
  * Cancels a recurring donation via the donation contract's
- * `cancel_subscription`. As of #282, this no longer zeroes the supporter's
- * SAC allowance to the donation contract outright — that allowance is
- * shared across every subscription the supporter has in the same token, so
- * zeroing it would silently break any other active subscription in that
- * token. Instead, the contract reduces the allowance by only this
- * subscription's own committed amount (clamped at zero), leaving whatever
- * remainder other active subscriptions still need untouched.
+ * `cancel_subscription`. Cancellation subtracts the subscription's committed
+ * amount from the shared SAC allowance, clamped at zero. When a positive
+ * allowance remains, the contract emits `sub_allowance_updated` with the
+ * replacement expiry. Clients can use it to warn supporters when they need to
+ * re-approve the remaining allowance through a later ledger.
  */
 export async function cancelSubscription({
   supporterAddress,

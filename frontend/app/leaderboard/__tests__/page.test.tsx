@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { availableAssetCodes } from '@/lib/assets';
+import userEvent from '@testing-library/user-event';
 import type { ImageProps } from 'next/image';
 import LeaderboardPage from '../page';
 
@@ -127,8 +129,9 @@ describe('LeaderboardPage', () => {
     render(<LeaderboardPage />);
 
     expect(screen.getByRole('heading', { level: 1, name: /platform leaderboard/i })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /top creators/i })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /top supporters/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /top creators/i, pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /top supporters/i, pressed: false })).toBeInTheDocument();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getAllByText('Alice In Chains').length).toBeGreaterThan(0);
@@ -156,15 +159,22 @@ describe('LeaderboardPage', () => {
     expect(screen.getAllByText('Dave').length).toBeGreaterThan(0);
   });
 
-  it('switches to top supporters tab and fetches supporter rankings', async () => {
+  it('switches to top supporters with the keyboard and fetches supporter rankings', async () => {
     render(<LeaderboardPage />);
 
     await waitFor(() => {
       expect(screen.getAllByText('Alice In Chains').length).toBeGreaterThan(0);
     });
 
-    const supportersTab = screen.getByRole('tab', { name: /top supporters/i });
-    fireEvent.click(supportersTab);
+    const user = userEvent.setup();
+    const creators = screen.getByRole('button', { name: /top creators/i });
+    const supporters = screen.getByRole('button', { name: /top supporters/i });
+    creators.focus();
+    await user.tab();
+    expect(supporters).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(supporters).toHaveAttribute('aria-pressed', 'true');
+    expect(creators).toHaveAttribute('aria-pressed', 'false');
 
     await waitFor(() => {
       expect(screen.getAllByText('GBWHAL…7890').length).toBeGreaterThan(0);
@@ -181,13 +191,21 @@ describe('LeaderboardPage', () => {
       expect(screen.getAllByText('Alice In Chains').length).toBeGreaterThan(0);
     });
 
-    const usdcButton = screen.getByRole('button', { name: 'USDC' });
-    fireEvent.click(usdcButton);
+    const currencyFilter = screen.getByText('Currency:').parentElement;
+    expect(currencyFilter).not.toBeNull();
+    expect(
+      Array.from(currencyFilter!.querySelectorAll('button')).map((button) => button.textContent)
+    ).toEqual(availableAssetCodes());
 
-    expect(usdcButton).toHaveAttribute('aria-pressed', 'true');
+    const nextCurrency = availableAssetCodes().find((code) => code !== 'XLM');
+    if (!nextCurrency) return;
+    const currencyButton = screen.getByRole('button', { name: nextCurrency });
+    fireEvent.click(currencyButton);
+
+    expect(currencyButton).toHaveAttribute('aria-pressed', 'true');
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('currency=USDC')
+        expect.stringContaining(`currency=${nextCurrency}`)
       );
     });
   });
@@ -238,6 +256,24 @@ describe('LeaderboardPage', () => {
 
     await waitFor(() => {
       expect(screen.getAllByText('Alice In Chains').length).toBeGreaterThan(0);
+    });
+  });
+
+  it('refetches with the selected timeframe', async () => {
+    render(<LeaderboardPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Alice In Chains').length).toBeGreaterThan(0);
+    });
+
+    const thisWeek = screen.getByRole('button', { name: 'This Week' });
+    fireEvent.click(thisWeek);
+
+    expect(thisWeek).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('period=week')
+      );
     });
   });
 });

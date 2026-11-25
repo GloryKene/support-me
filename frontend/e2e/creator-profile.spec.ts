@@ -6,11 +6,12 @@ test.describe('Creator Profile Flow', () => {
     await setupE2EMocks(page);
 
     // 1. Navigate to Alice's profile
-    await page.goto('/alice');
+    const response = await page.goto('/alice');
+    expect(response?.status()).toBe(200);
 
     // 2. Creator identity
     await expect(page.getByRole('heading', { level: 1, name: 'Alice Creator' })).toBeVisible();
-    await expect(page.getByText('@alice')).toBeVisible();
+    await expect(page.getByText('@alice', { exact: true })).toBeVisible();
     await expect(page.getByText(DEFAULT_MOCK_CREATOR.bio)).toBeVisible();
 
     // 3. Social links
@@ -38,9 +39,9 @@ test.describe('Creator Profile Flow', () => {
     await setupE2EMocks(page);
 
     // Navigate to a non-existent creator
-    await page.goto('/nobody_here');
+    const response = await page.goto('/nobody_here');
 
-    await expect(page.getByRole('heading', { name: 'Creator not found' })).toBeVisible();
-    await expect(page.getByText('No profile exists for @nobody_here')).toBeVisible();
+    expect(response?.status()).toBe(404);
+    await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
   });
 });

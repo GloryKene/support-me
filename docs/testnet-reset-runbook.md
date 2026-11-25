@@ -54,25 +54,30 @@ Follow [`contract-deploy-workflow.md`](contract-deploy-workflow.md) to build and
 rustup target add wasm32v1-none
 cargo build --workspace --target wasm32v1-none --release
 
-# 2. Deploy Creator Registry
-REGISTRY_ID=$(stellar contract deploy \
-  --wasm target/wasm32v1-none/release/creator_registry.wasm \
-  --source-account ap-deployer --network testnet)
-
-# 3. Deploy Donation Contract
+# 2. Deploy Donation Contract
 DONATION_ID=$(stellar contract deploy \
   --wasm target/wasm32v1-none/release/donation.wasm \
   --source-account ap-deployer --network testnet)
 
-echo "Registry: $REGISTRY_ID"
+# 3. Deploy Creator Registry. It has no initialize entrypoint: its
+#    constructor runs in the deploy transaction and takes the admin set and
+#    the donation contract ID as arguments.
+REGISTRY_ID=$(stellar contract deploy \
+  --wasm target/wasm32v1-none/release/creator_registry.wasm \
+  --source-account ap-deployer --network testnet -- \
+  --admins "[\"$(stellar keys address ap-deployer)\"]" --threshold 1 --timelock_delay 0 \
+  --donation_contract "$DONATION_ID")
+
 echo "Donation: $DONATION_ID"
+echo "Registry: $REGISTRY_ID"
 ```
 
 ---
 
 ### Step 3: Initialize Contracts & Authorize Tokens
 
-1. **Initialize Donation Contract**:
+1. **Initialize Donation Contract** (the creator registry was already
+   configured by its constructor in Step 2):
 
    ```bash
    stellar contract invoke --id $DONATION_ID \
@@ -80,15 +85,7 @@ echo "Donation: $DONATION_ID"
      initialize --admin $(stellar keys address ap-deployer) --registry $REGISTRY_ID
    ```
 
-2. **Initialize Creator Registry**:
-
-   ```bash
-   stellar contract invoke --id $REGISTRY_ID \
-     --source-account ap-deployer --network testnet -- \
-     initialize --admin $(stellar keys address ap-deployer) --donation_contract $DONATION_ID
-   ```
-
-3. **Authorize Subscription Executor**:
+2. **Authorize Subscription Executor**:
 
    ```bash
    stellar contract invoke --id $DONATION_ID \
@@ -96,7 +93,7 @@ echo "Donation: $DONATION_ID"
      set_executor --new_executor $(stellar keys address ap-executor)
    ```
 
-4. **Add Tokens to Allowlist**:
+3. **Add Tokens to Allowlist**:
    ```bash
    # Add Native XLM SAC
    NATIVE_SAC="CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"

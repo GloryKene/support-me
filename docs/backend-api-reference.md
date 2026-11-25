@@ -214,7 +214,9 @@ Complete Twitter/X OAuth sign-in after redirect.
 
 ### GET /api/creators
 
-List all creators with search and pagination.
+List all creators with search and pagination. Each item uses the public creator
+allowlist described below, plus `_count.donations`. Internal account IDs and
+relations are never included.
 
 **Auth Required:** No
 
@@ -287,13 +289,14 @@ Get the current user's creator profile.
 
 ### GET /api/creators/leaderboard
 
-Get leaderboard for creators or supporters by currency.
+Get leaderboard for creators or supporters by currency and time period.
 
 **Auth Required:** No
 
 **Query Parameters:**
 - `type`: Leaderboard type - `creators` or `supporters`
-- `currency`: Currency code (e.g., `XLM`, `USDC`)
+- `currency`: Currency code (e.g., `XLM`, `USDC`, `USDT`)
+- `period` (optional): Donation period - `all` (default), `month` (current UTC calendar month), or `week` (current UTC week, Monday through Sunday)
 - `page` (optional): Page number (default: 1)
 - `limit` (optional): Items per page (default: 20)
 
@@ -352,7 +355,15 @@ Get leaderboard for creators or supporters by currency.
 
 ### GET /api/creators/:username
 
-Get a creator by username.
+Get a creator by username. The response is an explicit public allowlist:
+`id`, `username`, `walletAddress`, `displayName`, `bio`, `avatarUrl`, `socialLinks`,
+`acceptsXlm`, `acceptsUsdc`, `acceptsUsdt`, `donationGoal`, `presetAmounts`, `theme`,
+`createdAt`, and `updatedAt`. `presetAmounts` contains JSON numbers.
+
+The creator `id` remains available for stable discovery keys. The owning account's
+`userId`, account relations, and other internal fields are not exposed, including
+on cached responses or database fallback. Authenticated owner endpoints retain
+their existing response contract.
 
 **Auth Required:** No
 
@@ -747,6 +758,37 @@ Get a creator's goals.
 
 ---
 
+### GET /api/goals/:id/periods
+
+Get a recurring goal's finished periods, newest first.
+
+**Auth Required:** No
+
+**Response:**
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "goalId": 1,
+      "start": "2024-01-01T00:00:00.000Z",
+      "end": "2024-02-01T00:00:00.000Z",
+      "raised": 120.0,
+      "targetAmount": 100.0,
+      "reached": true,
+      "createdAt": "2024-02-01T00:05:00.000Z"
+    }
+  ]
+}
+```
+
+**Notes:**
+- A row is written each time a recurring goal resets, just before `currentAmount` is zeroed
+- `targetAmount` is the target that applied when the period ended; `reached` is `raised >= targetAmount`
+- Period ends follow the goal's schedule: the next `currentPeriodEnd` is one interval after the previous end (calendar months for `MONTHLY`, clamped to the last day of shorter months)
+
+---
+
 ### POST /api/goals/:username
 
 Create a goal for a creator.
@@ -1095,7 +1137,6 @@ data: {
   "donor": "G...",
   "creator": "G...",
   "amount": 10.5,
-  "fee_amount": 0.0,
   "memo": "Great work!",
   "timestamp": 1704067200000,
   "txHash": "abc123...",
@@ -1157,8 +1198,14 @@ Common error codes returned by the API:
 - `NOT_FOUND`: Resource not found
 - `CONFLICT`: Resource already exists or conflict with current state
 - `BAD_REQUEST`: Invalid request parameters
+- `VALIDATION_ERROR`: Malformed JSON body or failed schema validation
+- `PAYLOAD_TOO_LARGE`: JSON body exceeds the explicit 100kb limit (HTTP 413)
+- `UNSUPPORTED_CHARSET` / `UNSUPPORTED_ENCODING`: Body encoding is not accepted (HTTP 415)
 - `TOO_MANY_REQUESTS`: Rate limit exceeded
 - `INTERNAL_ERROR`: Server error
+
+Client-side body-parser errors (4xx) include `requestId` when available and are
+not reported to Sentry.
 
 ---
 

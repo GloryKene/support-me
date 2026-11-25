@@ -10,6 +10,7 @@ import { AppNav } from '@/components/AppNav';
 import { Skeleton } from '@/components/Skeleton';
 import { notify } from '@/lib/notify';
 import { useNgnRate } from '@/lib/useNgnRate';
+import { usePrices } from '@/lib/usePrices';
 import { API_URL } from '@/lib/api';
 import { fundWithFriendbot } from '@/lib/contract';
 import { horizonServer } from '@/lib/stellarNetwork';
@@ -27,9 +28,11 @@ export default function WithdrawPage() {
   const { creator, loading: creatorLoading } = useCreator();
   const walletAddress = user?.walletAddress || '';
   const ngnRate = useNgnRate();
+  const prices = usePrices();
 
   const [xlmBalance, setXlmBalance] = useState<string | null>(null);
   const [usdcBalance, setUsdcBalance] = useState<string | null>(null);
+  const [currency, setCurrency] = useState<'USDC' | 'XLM'>('USDC');
   const [balancesLoading, setBalancesLoading] = useState(true);
   const [isUnfunded, setIsUnfunded] = useState(false);
   const [funding, setFunding] = useState(false);
@@ -52,14 +55,21 @@ export default function WithdrawPage() {
         const native = account.balances.find(
           (b): b is StellarSdk.Horizon.HorizonApi.BalanceLineNative => b.asset_type === 'native'
         );
-        setXlmBalance(native ? Math.round(parseFloat(native.balance)).toString() : '0');
+        const xlm = native ? Math.round(parseFloat(native.balance)).toString() : '0';
+        setXlmBalance(xlm);
 
         const usdcIssuer = process.env.NEXT_PUBLIC_USDC_ISSUER;
         const usdc = account.balances.find(
           (b): b is StellarSdk.Horizon.HorizonApi.BalanceLineAsset =>
             'asset_code' in b && b.asset_code === 'USDC' && (!usdcIssuer || b.asset_issuer === usdcIssuer)
         );
-        setUsdcBalance(usdc ? Math.round(parseFloat(usdc.balance)).toString() : null);
+        const usdcBal = usdc ? Math.round(parseFloat(usdc.balance)).toString() : null;
+        setUsdcBalance(usdcBal);
+
+        // If creator only holds XLM (no USDC balance), automatically select XLM for convenience
+        if ((!usdcBal || parseFloat(usdcBal) === 0) && parseFloat(xlm) > 0) {
+          setCurrency('XLM');
+        }
       })
       .catch((err) => {
         const message = (err as Error)?.message || '';
@@ -75,8 +85,14 @@ export default function WithdrawPage() {
   }, [walletAddress]);
 
   const NGN_PER_USDC = ngnRate?.rate || 1380;
-  const naira = amount ? Number(amount) * NGN_PER_USDC : 0;
+  // CoinGecko XLM price in USD (fallback to 0.12 if not yet loaded)
+  const xlmPriceUsd = prices?.XLM ?? 0.12;
+  const NGN_PER_XLM = Math.round(xlmPriceUsd * NGN_PER_USDC);
+  const effectiveRate = currency === 'USDC' ? NGN_PER_USDC : NGN_PER_XLM;
+  const naira = amount ? Number(amount) * effectiveRate : 0;
   const availableUsdc = usdcBalance != null ? parseFloat(usdcBalance) : 0;
+  const availableXlm = xlmBalance != null ? parseFloat(xlmBalance) : 0;
+  const availableSelected = currency === 'USDC' ? availableUsdc : availableXlm;
 
   const handleFundWithFriendbot = async () => {
     if (!walletAddress) return;
@@ -90,14 +106,20 @@ export default function WithdrawPage() {
       const native = account.balances.find(
         (b): b is StellarSdk.Horizon.HorizonApi.BalanceLineNative => b.asset_type === 'native'
       );
-      setXlmBalance(native ? Math.round(parseFloat(native.balance)).toString() : '0');
+      const xlm = native ? Math.round(parseFloat(native.balance)).toString() : '0';
+      setXlmBalance(xlm);
 
       const usdcIssuer = process.env.NEXT_PUBLIC_USDC_ISSUER;
       const usdc = account.balances.find(
         (b): b is StellarSdk.Horizon.HorizonApi.BalanceLineAsset =>
           'asset_code' in b && b.asset_code === 'USDC' && (!usdcIssuer || b.asset_issuer === usdcIssuer)
       );
-      setUsdcBalance(usdc ? Math.round(parseFloat(usdc.balance)).toString() : null);
+      const usdcBal = usdc ? Math.round(parseFloat(usdc.balance)).toString() : null;
+      setUsdcBalance(usdcBal);
+
+      if ((!usdcBal || parseFloat(usdcBal) === 0) && parseFloat(xlm) > 0) {
+        setCurrency('XLM');
+      }
     } catch (err) {
       notify.error('Failed to fund wallet', (err as Error).message);
     } finally {
@@ -150,7 +172,14 @@ export default function WithdrawPage() {
     setError(null);
     const n = Number(amount);
     if (!Number.isFinite(n) || n <= 0) { setError('Enter an amount greater than zero.'); return; }
-    if (usdcBalance !== null && n > availableUsdc) { setError('Amount exceeds your available USDC balance.'); return; }
+    if (currency === 'USDC' && usdcBalance !== null && n > availableUsdc) {
+      setError('Amount exceeds your available USDC balance.');
+      return;
+    }
+    if (currency === 'XLM' && xlmBalance !== null && n > availableXlm) {
+      setError('Amount exceeds your available XLM balance.');
+      return;
+    }
     if (!/^\d{10}$/.test(accountNo)) { setError('Enter a valid 10-digit account number.'); return; }
     if (!bank) { setError('Select your bank.'); return; }
     if (!accountName && !verifying) { setError('Please verify your account number first.'); return; }
@@ -181,7 +210,7 @@ export default function WithdrawPage() {
           amountIn: n,
           amountOut: naira || undefined,
           fee: 0,
-          currency: 'USDC',
+          currency,
           anchorTxId,
           status: 'completed',
         }),
@@ -215,7 +244,7 @@ export default function WithdrawPage() {
               </span>
             </div>
             <p className="mt-1 text-sm text-muted font-medium">
-              Convert your USDC to NGN and send it to your bank account.
+              Convert your XLM or USDC directly to NGN and send it to your bank account.
             </p>
           </div>
 
@@ -228,7 +257,7 @@ export default function WithdrawPage() {
               <span className="font-extrabold text-ink">Simulated off-ramp</span>
             </div>
             <p>
-              This simulates a licensed bank off-ramp on testnet. No real bank transfer occurs and no on-chain funds move.
+              This simulates a licensed bank off-ramp on testnet for XLM and USDC. No real bank transfer occurs and no on-chain funds move.
               The resulting withdrawal record is persisted to your account history so it appears in your Activity and exports.
             </p>
           </div>
@@ -279,7 +308,7 @@ export default function WithdrawPage() {
                   ₦{naira.toLocaleString()} simulated transfer to your {bank} account ending {accountNo.slice(-4)}.
                 </p>
                 <p className="mt-1 text-xs text-muted">
-                  This transaction has been persisted to your withdrawal history.
+                  Simulated off-ramp of {amount} {currency} to Naira has been persisted to your withdrawal history.
                 </p>
               </div>
               <div className="rounded-xl bg-background border-2 border-ink/10 p-3 text-sm">
@@ -304,14 +333,63 @@ export default function WithdrawPage() {
           ) : (
             <form onSubmit={submit} className="card-brutal p-6 space-y-4">
               <div>
-                <label className="block text-sm font-bold text-ink mb-1.5" htmlFor="amt">
-                  Amount (USDC)
+                <label className="block text-sm font-bold text-ink mb-1.5">
+                  Currency to withdraw
                 </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => { setCurrency('XLM'); setError(null); }}
+                    className={`btn-brutal text-sm py-2 px-3 flex flex-col items-center justify-center transition-all ${
+                      currency === 'XLM'
+                        ? 'btn-brutal-primary font-black'
+                        : 'btn-brutal-white font-semibold'
+                    }`}
+                    aria-pressed={currency === 'XLM'}
+                  >
+                    <span>XLM</span>
+                    <span className="text-xs opacity-75 font-normal">
+                      {isUnfunded ? 'Not funded' : (xlmBalance != null ? `${Number(xlmBalance).toLocaleString()} XLM` : '—')}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setCurrency('USDC'); setError(null); }}
+                    className={`btn-brutal text-sm py-2 px-3 flex flex-col items-center justify-center transition-all ${
+                      currency === 'USDC'
+                        ? 'btn-brutal-primary font-black'
+                        : 'btn-brutal-white font-semibold'
+                    }`}
+                    aria-pressed={currency === 'USDC'}
+                  >
+                    <span>USDC</span>
+                    <span className="text-xs opacity-75 font-normal">
+                      {isUnfunded ? 'Not funded' : (usdcBalance != null ? `${Number(usdcBalance).toLocaleString()} USDC` : '—')}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-sm font-bold text-ink" htmlFor="amt">
+                    Amount ({currency})
+                  </label>
+                  {availableSelected > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setAmount(String(availableSelected))}
+                      className="text-xs font-bold text-primary hover:underline"
+                    >
+                      Use max ({availableSelected.toLocaleString()} {currency})
+                    </button>
+                  )}
+                </div>
                 <input
                   id="amt"
                   className="input-brutal"
                   inputMode="decimal"
-                  placeholder="100.00"
+                  placeholder={currency === 'USDC' ? '100.00' : '500.00'}
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
                   disabled={stage === 'processing'}
@@ -321,7 +399,10 @@ export default function WithdrawPage() {
                     <p>
                       You&apos;ll receive ≈{' '}
                       <span className="font-bold text-ink">₦{naira.toLocaleString()}</span>{' '}
-                      <span className="text-muted">(₦{NGN_PER_USDC.toLocaleString()}/USDC)</span>
+                      <span className="text-muted">
+                        (₦{effectiveRate.toLocaleString()}/{currency}
+                        {currency === 'XLM' && prices?.XLM != null ? ` · ≈ $${prices.XLM.toFixed(2)}/XLM` : ''})
+                      </span>
                     </p>
                     {ngnRate?.ageMinutes != null && (
                       <p className="text-xs mt-0.5">

@@ -1,12 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, within, act, waitFor } from '@testing-library/react';
 import { WalletMenu } from '@/components/WalletMenu';
+import { notify } from '@/lib/notify';
 
 const pathname = vi.hoisted(() => ({ current: '/app' }));
 const logout = vi.hoisted(() => vi.fn());
 const mockUser = vi.hoisted(() => ({
   current: { walletAddress: 'GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUV' as string | null, email: null as string | null },
 }));
+
+vi.mock('@/lib/notify', () => ({ notify: { error: vi.fn() } }));
 
 vi.mock('next/navigation', () => ({
   usePathname: () => pathname.current,
@@ -28,11 +31,12 @@ function openMenu() {
 
 beforeEach(() => {
   pathname.current = '/app';
-  logout.mockClear();
+  logout.mockReset();
+  vi.mocked(notify.error).mockClear();
   mockUser.current = { walletAddress: 'GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUV', email: null };
 });
 
-describe('WalletMenu account chip (#10, #11)', () => {
+describe('WalletMenu account chip (#10, #11, #455)', () => {
   it('shows a sliced wallet address for a wallet-signed-in user', () => {
     render(<WalletMenu />);
     expect(screen.getByRole('button', { expanded: false })).toHaveTextContent('GABC…STUV');
@@ -42,6 +46,12 @@ describe('WalletMenu account chip (#10, #11)', () => {
     mockUser.current = { walletAddress: null, email: 'you@example.com' };
     render(<WalletMenu />);
     expect(screen.getByRole('button', { expanded: false })).toHaveTextContent('you@example.com');
+  });
+
+  it('truncates long emails to prevent overflow on mobile (#455)', () => {
+    mockUser.current = { walletAddress: null, email: 'verylonguseremailaddress@example.com' };
+    render(<WalletMenu />);
+    expect(screen.getByRole('button', { expanded: false })).toHaveTextContent('verylo…@example.com');
   });
 
   it('falls back to a generic label for a Twitter user with neither', () => {
@@ -65,9 +75,6 @@ describe('WalletMenu secondary destinations (#151)', () => {
 
   it('shows the secondary destinations at every breakpoint, not just mobile', () => {
     const menu = openMenu();
-    // The block used to be sm:hidden because mobile had no other route to
-    // these pages. The desktop top nav no longer does either (#151), so the
-    // restriction would strand desktop users.
     const container = menu.getByRole('menuitem', { name: /settings/i }).closest('div');
     expect(container?.className).not.toContain('sm:hidden');
   });
@@ -82,6 +89,20 @@ describe('WalletMenu secondary destinations (#151)', () => {
     fireEvent.click(menu.getByRole('menuitem', { name: /activity/i }));
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
+});
+
+it('offers a retry when signing out fails', async () => {
+  logout.mockRejectedValue(new TypeError('Failed to fetch'));
+  const menu = openMenu();
+
+  fireEvent.click(menu.getByRole('menuitem', { name: 'Sign Out' }));
+
+  await waitFor(() => expect(notify.error).toHaveBeenCalledWith(
+    'Could not sign out',
+    expect.stringContaining('could not end your session'),
+    { action: { label: 'Retry', onClick: expect.any(Function) } },
+  ));
+  expect(menu.getByRole('menuitem', { name: 'Sign Out' })).toHaveAttribute('aria-disabled', 'false');
 });
 
 describe('WalletMenu active destination', () => {
@@ -105,16 +126,49 @@ describe('WalletMenu active destination', () => {
   });
 });
 
-describe('WalletMenu dismissal', () => {
-  it('closes on Escape', () => {
-    openMenu();
+describe('WalletMenu dismissal and keyboard navigation (#455)', () => {
+  it('closes on Escape and returns focus to the trigger button', () => {
+    render(<WalletMenu />);
+    const trigger = screen.getByRole('button', { expanded: false });
+    fireEvent.click(trigger);
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(trigger);
   });
 
   it('closes on an outside click', () => {
     openMenu();
     fireEvent.mouseDown(document.body);
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('opens and roves focus with arrow keys', () => {
+    vi.useFakeTimers();
+    render(<WalletMenu />);
+    const trigger = screen.getByRole('button', { expanded: false });
+
+    // Open with ArrowDown
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+
+    act(() => {
+      vi.runAllTimers();
+    });
+
+    const menu = screen.getByRole('menu');
+    const items = within(menu).getAllByRole('menuitem');
+    expect(document.activeElement).toBe(items[0]);
+
+    // Navigate with ArrowDown
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(items[1]);
+
+    // Navigate with ArrowUp
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    expect(document.activeElement).toBe(items[0]);
+
+    vi.useRealTimers();
   });
 });

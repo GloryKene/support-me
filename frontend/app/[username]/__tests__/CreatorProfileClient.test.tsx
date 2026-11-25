@@ -222,6 +222,48 @@ describe('CreatorProfileClient', () => {
     vi.clearAllMocks();
   });
 
+  it('disconnects the opener before navigating the share tab to X', async () => {
+    const user = userEvent.setup();
+    const shareDocument = document.implementation.createHTMLDocument();
+    const shareWindow = { opener: window as Window | null, document: shareDocument };
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {
+      expect(shareWindow.opener).toBeNull();
+    });
+    const open = vi.spyOn(window, 'open').mockReturnValue(shareWindow as unknown as Window);
+    try {
+      mockFetchSequence({ '/api/creators/alice': baseCreator, '/api/goals/alice': { items: [] } });
+      await renderProfile('alice', 'en');
+      await user.click(await screen.findByRole('button', { name: 'Share on X/Twitter' }));
+
+      expect(open).toHaveBeenCalledWith('about:blank', '_blank');
+      const link = shareDocument.querySelector('a');
+      expect(link?.href).toMatch(/^https:\/\/x\.com\/intent\/post\?text=.+&url=.+/);
+      expect(link?.rel).toBe('noopener noreferrer');
+      expect(click).toHaveBeenCalledOnce();
+    } finally {
+      open.mockRestore();
+      click.mockRestore();
+    }
+  });
+
+  it('copies the profile link when the browser blocks the share tab', async () => {
+    const user = userEvent.setup();
+    const clipboard = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    try {
+      mockFetchSequence({ '/api/creators/alice': baseCreator, '/api/goals/alice': { items: [] } });
+      await renderProfile('alice', 'en');
+      await user.click(await screen.findByRole('button', { name: 'Share on X/Twitter' }));
+
+      expect(clipboard).toHaveBeenCalledWith(
+        `${process.env.NEXT_PUBLIC_SITE_URL || 'https://support-mee.vercel.app'}/alice`
+      );
+    } finally {
+      open.mockRestore();
+      clipboard.mockRestore();
+    }
+  });
+
   it('explains why tips are unavailable before asking the supporter to connect', async () => {
     mockFetchSequence({
       '/api/creators/alice': { ...baseCreator, walletAddress: null },

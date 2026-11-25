@@ -21,6 +21,7 @@ import { AccountDataSection } from '@/components/AccountDataSection';
 import { ThemeEditor } from '@/components/ThemeEditor';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { explorerAccountUrl } from '@/lib/stellarNetwork';
+import { formatAmount } from '@/lib/format';
 
 interface Goal {
   id: number;
@@ -52,7 +53,7 @@ const parseGoalTarget = (value: string): number | null => {
 
 export default function SettingsPage() {
   const { user, token } = useAuth();
-  const { creator, loading: creatorLoading, invalidate } = useCreator();
+  const { creator, loading: creatorLoading, error: creatorError, invalidate } = useCreator();
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -70,6 +71,7 @@ export default function SettingsPage() {
 
   const [goals, setGoals] = useState<Goal[]>([]);
   const [goalsLoading, setGoalsLoading] = useState(true);
+  const [goalsError, setGoalsError] = useState(false);
   const [creatingGoal, setCreatingGoal] = useState(false);
   const [newGoalTitle, setNewGoalTitle] = useState('');
   const [newGoalDescription, setNewGoalDescription] = useState('');
@@ -82,6 +84,9 @@ export default function SettingsPage() {
   // Goal awaiting confirmation in the delete dialog.
   const [goalToDelete, setGoalToDelete] = useState<Goal | null>(null);
   const [deletingGoal, setDeletingGoal] = useState(false);
+  // Theme editor reports its own unsaved draft state up to the page guard.
+  const [themeDirty, setThemeDirty] = useState(false);
+  const anyDirty = dirty || themeDirty || goalDraft !== null;
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Tracks which creator.id the form was last hydrated from, so a refetch
@@ -127,12 +132,14 @@ export default function SettingsPage() {
   // rather than needing auth — only create/edit require the owner's token.
   const fetchGoals = async (username: string) => {
     setGoalsLoading(true);
+    setGoalsError(false);
     try {
       const res = await fetch(`${API_URL}/api/goals/${encodeURIComponent(username)}`);
-      if (!res.ok) return;
+      if (!res.ok) throw new Error('Could not load goals');
       const data = await res.json();
       setGoals(Array.isArray(data) ? data : data.items || []);
     } catch (err) {
+      setGoalsError(true);
       notify.error('Could not load goals', err);
     } finally {
       setGoalsLoading(false);
@@ -260,14 +267,14 @@ export default function SettingsPage() {
   // only covers browser-level navigation, not in-app Link clicks — the App
   // Router has no built-in route-change interceptor for that.
   useEffect(() => {
-    if (!dirty) return;
+    if (!anyDirty) return;
     const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = '';
     };
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
-  }, [dirty]);
+  }, [anyDirty]);
 
   const handleFilePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -391,6 +398,27 @@ export default function SettingsPage() {
               <Skeleton className="h-10 w-full" />
               <Skeleton className="h-10 w-full" />
               <Skeleton className="h-24 w-full" />
+            </div>
+          </div>
+        </div>
+      </ProtectedRoute>
+    );
+  }
+
+  if (!creator && creatorError) {
+    return (
+      <ProtectedRoute>
+        <div className="min-h-screen bg-background">
+          <AppNav />
+          <div className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+            <div className="card-brutal p-8 text-center mb-6">
+              <p className="text-muted mb-4 font-medium">{creatorError}</p>
+              <button type="button" onClick={invalidate} className="btn-brutal btn-brutal-primary">
+                Retry
+              </button>
+            </div>
+            <div className="card-brutal p-8">
+              <AccountDataSection />
             </div>
           </div>
         </div>
@@ -611,6 +639,13 @@ export default function SettingsPage() {
 
               {goalsLoading ? (
                 <Skeleton className="h-16 w-full" />
+              ) : goalsError ? (
+                <div className="card-brutal p-4 space-y-3" role="alert">
+                  <p className="text-sm text-ink font-bold">Could not load goals.</p>
+                  <button type="button" onClick={() => creator && fetchGoals(creator.username)} className="btn-brutal btn-brutal-white text-sm px-3 py-1.5">
+                    Retry
+                  </button>
+                </div>
               ) : goals.length > 0 ? (
                 <ul className="space-y-3">
                   {goals.map((g) => {
@@ -695,7 +730,7 @@ export default function SettingsPage() {
                               <p className="text-sm text-ink/80 font-medium">{g.description}</p>
                             )}
                             <p className="text-sm text-muted font-medium">
-                              {g.currentAmount.toFixed(0)} / {g.targetAmount.toFixed(0)} {g.currency} ({pct.toFixed(0)}%)
+                              {formatAmount(g.currentAmount)} / {formatAmount(g.targetAmount)} {g.currency} ({pct.toFixed(0)}%)
                             </p>
                           </div>
                           <div className="flex gap-2 shrink-0">
@@ -818,7 +853,7 @@ export default function SettingsPage() {
                 <button
                   type="button"
                   onClick={handleCreateGoal}
-                  disabled={creatingGoal}
+                  disabled={creatingGoal || goalsError}
                   className="btn-brutal btn-brutal-primary w-full"
                 >
                   {creatingGoal ? 'Adding…' : 'Add goal'}
@@ -831,6 +866,7 @@ export default function SettingsPage() {
               displayName={creator.displayName || creator.username}
               token={token}
               initialTheme={creator.theme ?? null}
+              onDirtyChange={setThemeDirty}
             />
 
             {/* Social links */}
@@ -907,7 +943,7 @@ function GoalSummary({ goal }: { goal: Goal }) {
   return (
     <div className="card-brutal bg-card p-4 space-y-2">
       <p className="text-sm font-bold text-ink">
-        {goal.currentAmount.toFixed(0)} / {goal.targetAmount.toFixed(0)} {goal.currency} raised ({pct.toFixed(0)}%)
+        {formatAmount(goal.currentAmount)} / {formatAmount(goal.targetAmount)} {goal.currency} raised ({pct.toFixed(0)}%)
       </p>
       <div
         className="h-3 w-full border-2 border-ink rounded-full overflow-hidden bg-background"

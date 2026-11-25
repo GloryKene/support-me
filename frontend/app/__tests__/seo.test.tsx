@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render } from '@testing-library/react';
 import robots from '@/app/robots';
 import sitemap from '@/app/sitemap';
 import { metadata as dashboardMeta } from '@/app/dashboard/layout';
@@ -7,7 +8,24 @@ import { metadata as adminMeta } from '@/app/admin/layout';
 import { metadata as activityMeta } from '@/app/activity/layout';
 import { metadata as appMeta } from '@/app/app/layout';
 import { metadata as authMeta } from '@/app/auth/layout';
+import { metadata as receiptMeta } from '@/app/receipt/layout';
 import { metadata as rootMeta } from '@/app/layout';
+import { metadata as discoverMeta } from '@/app/discover/layout';
+import { metadata as leaderboardMeta } from '@/app/leaderboard/layout';
+import CreatorProfilePage, { generateMetadata } from '@/app/[username]/page';
+import { fetchCreatorSummary } from '@/app/[username]/creator-summary';
+
+vi.mock('@/app/[username]/creator-summary', () => ({
+  fetchCreatorSummary: vi.fn(),
+}));
+
+vi.mock('@/app/[username]/CreatorProfileClient', () => ({
+  default: () => <div data-testid="creator-profile-client" />,
+}));
+
+vi.mock('next/headers', () => ({
+  cookies: async () => ({ get: () => undefined }),
+}));
 
 describe('SEO & Robots Directives', () => {
   it('disallows index and follow on private layouts', () => {
@@ -18,6 +36,7 @@ describe('SEO & Robots Directives', () => {
       { name: 'activity', meta: activityMeta },
       { name: 'app', meta: appMeta },
       { name: 'auth', meta: authMeta },
+      { name: 'receipt', meta: receiptMeta },
     ];
 
     layouts.forEach(({ name, meta }) => {
@@ -33,9 +52,12 @@ describe('SEO & Robots Directives', () => {
       index: true,
       follow: true,
     });
-    expect(rootMeta.alternates).toEqual({
-      canonical: '/',
-    });
+    expect(rootMeta.alternates).toBeUndefined();
+  });
+
+  it('sets self-referencing canonicals for public route layouts', () => {
+    expect(discoverMeta.alternates?.canonical).toBe('/discover');
+    expect(leaderboardMeta.alternates?.canonical).toBe('/leaderboard');
   });
 
   it('generates consistent robots.txt configuration', () => {
@@ -76,5 +98,43 @@ describe('SEO & Robots Directives', () => {
     expect(new Date(first[0].lastModified as string).toISOString()).toBe(
       '2026-09-01T00:00:00.000Z'
     );
+  });
+});
+
+describe('Creator profile metadata (#459)', () => {
+  const creator = {
+    username: 'Alice',
+    displayName: 'Alice',
+    bio: 'Stored profile',
+    avatarUrl: null,
+    donationGoal: null,
+    updatedAt: '2026-05-01T12:00:00.000Z',
+  };
+
+  beforeEach(() => {
+    vi.mocked(fetchCreatorSummary).mockReset();
+    vi.mocked(fetchCreatorSummary).mockResolvedValue(creator);
+  });
+
+  const renderJsonLd = async (username: string) => {
+    const page = await CreatorProfilePage({ params: Promise.resolve({ username }) });
+    const { container } = render(page);
+    const script = container.querySelector('script[type="application/ld+json"]');
+    return script ? JSON.parse(script.innerHTML) : null;
+  };
+
+  it('canonicalises to the stored username casing', async () => {
+    const meta = await generateMetadata({ params: Promise.resolve({ username: 'alice' }) });
+
+    expect(meta.alternates?.canonical).toBe('/Alice');
+    expect(meta.openGraph?.url).toBe('/Alice');
+  });
+
+  it('uses the API updatedAt for dateModified so the value is stable between renders', async () => {
+    const first = await renderJsonLd('alice');
+    const second = await renderJsonLd('Alice');
+
+    expect(first.dateModified).toBe(creator.updatedAt);
+    expect(second.dateModified).toBe(first.dateModified);
   });
 });

@@ -319,4 +319,21 @@ describe('AppHubPage', () => {
       expect(screen.getByText(/excludes USDC due to missing price data/i)).toBeInTheDocument();
     });
   });
+
+  describe('Cash out card (#154)', () => {
+    it('clearly surfaces direct cash-out support for both XLM and USDC', async () => {
+      render(<AppHubPage />);
+
+      expect(screen.getByRole('heading', { name: 'Cash out' })).toBeInTheDocument();
+      expect(
+        screen.getByText(/Simulate converting your XLM or USDC to Naira/i)
+      ).toBeInTheDocument();
+      expect(screen.getByText('Direct XLM Cash-out')).toBeInTheDocument();
+      expect(screen.getByText('Direct USDC Cash-out')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Withdraw \(Demo\)/i })).toHaveAttribute(
+        'href',
+        '/app/withdraw'
+      );
+    });
+  });
 });

@@ -48,7 +48,11 @@ export function AuthMethods() {
     setTwitterError(null);
     try {
       const redirectUrl = await getTwitterRedirectUrl();
-      window.location.href = redirectUrl;
+      const url = new URL(redirectUrl);
+      if (url.protocol !== 'https:' || !['twitter.com', 'x.com'].includes(url.host)) {
+        throw new Error('Twitter sign-in returned an invalid redirect URL.');
+      }
+      window.location.href = url.href;
       // Intentionally no setConnectingTwitter(false) on success: the page is
       // navigating away, and leaving the button in its loading state avoids
       // a flash of the enabled button during that navigation.

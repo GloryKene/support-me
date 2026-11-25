@@ -43,6 +43,42 @@ const LOOKBACK_LEDGERS = Number(process.env.SOROBAN_EVENTS_LOOKBACK_LEDGERS) || 
 // backlog (e.g. after a restart, or a retention-window recovery) drain in
 // one poll instead of trickling in one page every POLL_INTERVAL_MS (#268).
 const EVENTS_PAGE_LIMIT = 50;
+
+/**
+ * Recognizes a Postgres CHECK violation across the ways Prisma exposes it:
+ * raw SQL fails with P2010 and SQLSTATE 23514 in `meta.code`, while an ORM
+ * write may be P2004 or a PrismaClientUnknownRequestError that carries
+ * SQLSTATE 23514 only inside its wrapped PostgresError message. The listener
+ * must treat these as "this event's row is invalid, skip it" rather than as a
+ * transient poll failure: rethrowing would leave the cursor unadvanced and
+ * replay the same bad event forever.
+ */
+export function isCheckConstraintViolation(error: unknown): boolean {
+  const candidate = error as {
+    code?: unknown;
+    meta?: { code?: unknown; database_error?: unknown };
+    message?: unknown;
+  } | null;
+  if (!candidate) return false;
+  if (candidate.code === "23514") return true;
+  const meta = candidate.meta;
+  if (meta?.code === "23514") return true;
+  if (candidate.code === "P2004") return true;
+  if (
+    typeof meta?.database_error === "string" &&
+    /check constraint/i.test(meta.database_error)
+  ) {
+    return true;
+  }
+  // Prisma 5.22 wraps a CHECK rejection from an ORM write in a
+  // PrismaClientUnknownRequestError with no `code`/`meta`; the SQLSTATE and
+  // constraint text survive only inside the nested PostgresError message.
+  return (
+    typeof candidate.message === "string" &&
+    (candidate.message.includes('code: "23514"') ||
+      /violates check constraint/i.test(candidate.message))
+  );
+}
 // Upper bound on pages drained in a single poll tick, so a pathological
 // backlog cannot monopolize the event loop forever; the next tick resumes
 // from wherever this one left off.
@@ -224,27 +260,27 @@ export class SorobanEventListener {
 
     switch (eventType) {
       case "donated": {
+        const donor = topics[1] as string;
+        const creator = topics[2] as string;
         const value = decodeScVal(evt.value) as {
           amount: bigint;
           memo?: string;
           timestamp: bigint;
           token?: string;
           donation_id?: bigint | number;
-          fee_amount?: bigint;
           subscription_id?: bigint | number | null;
         };
 
+        const currency = resolveTokenCurrency(
+          value.token ? String(value.token) : undefined
+        );
+
         const donationId =
           value.donation_id != null ? Number(value.donation_id) : undefined;
-        const feeAmount =
-          value.fee_amount != null ? value.fee_amount.toString() : undefined;
         const subId =
           value.subscription_id != null
             ? Number(value.subscription_id)
             : undefined;
-        const donor = topics[1] as string;
-        const creator = topics[2] as string;
-        const currency = resolveTokenCurrency(value.token ? String(value.token) : undefined);
 
         const payload: DonationEvent = {
           donor,
@@ -256,7 +292,6 @@ export class SorobanEventListener {
           ledger: evt.ledger,
           txHash: evt.txHash,
           donationId,
-          feeAmount,
           subscriptionId: subId,
         };
 
@@ -580,6 +615,19 @@ export class SorobanEventListener {
       // A unique-constraint loss means a concurrent writer already owns the
       // on-chain identity; that row's own reconciliation is authoritative.
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") return;
+      // A CHECK violation means the event contradicts a database invariant
+      // (e.g. a zero/negative amount). No retry can make that row valid, so
+      // log enough to investigate, skip it, and let the poll advance rather
+      // than crash-looping on the same event (#485).
+      if (isCheckConstraintViolation(err)) {
+        console.warn(
+          `SorobanEventListener: skipping donated event ${evt.id}; on-chain amount ` +
+            `${onChain.amount} violates a database check constraint ` +
+            `(creator id ${creator.id}, donor ${donorAddress}):`,
+          (err as Error).message
+        );
+        return;
+      }
       console.error(
         `SorobanEventListener: error reconciling donated event ${evt.id}:`,
         (err as Error).message

@@ -6,7 +6,6 @@ export const MOCK_CREATOR_ADDRESS = 'GC235RXOHGDYVO5P3UAGXATQ2W22XKH2LA64IZXQD6H
 
 export interface MockCreator {
   id: number;
-  userId?: number;
   username: string;
   displayName: string;
   walletAddress: string;
@@ -21,7 +20,6 @@ export interface MockCreator {
 
 export const DEFAULT_MOCK_CREATOR: MockCreator = {
   id: 1,
-  userId: 1,
   username: 'alice',
   displayName: 'Alice Creator',
   walletAddress: MOCK_CREATOR_ADDRESS,
@@ -92,6 +90,14 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, Idempotency-Key',
 };
+
+function authCorsHeaders(route: Route) {
+  return {
+    ...CORS_HEADERS,
+    'Access-Control-Allow-Origin': route.request().headers().origin ?? '*',
+    'Access-Control-Allow-Credentials': 'true',
+  };
+}
 
 /**
  * Configure comprehensive mocks for browser-side wallet, contract calls,
@@ -246,13 +252,13 @@ export async function setupE2EMocks(page: Page, options: SetupE2EOptions = {}) {
   // 4. Intercept backend auth APIs
   await page.route('**/api/auth/challenge', async (route: Route) => {
     if (route.request().method() === 'OPTIONS') {
-      await route.fulfill({ status: 204, headers: CORS_HEADERS });
+      await route.fulfill({ status: 204, headers: authCorsHeaders(route) });
       return;
     }
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      headers: CORS_HEADERS,
+      headers: authCorsHeaders(route),
       body: JSON.stringify({
         message: `Sign in to SupportMe\n\nAddress: ${userAddress}\nNonce: 12345`,
       }),
@@ -261,14 +267,14 @@ export async function setupE2EMocks(page: Page, options: SetupE2EOptions = {}) {
 
   await page.route('**/api/auth/verify', async (route: Route) => {
     if (route.request().method() === 'OPTIONS') {
-      await route.fulfill({ status: 204, headers: CORS_HEADERS });
+      await route.fulfill({ status: 204, headers: authCorsHeaders(route) });
       return;
     }
     const hasProfile = options.hasProfile !== undefined ? options.hasProfile : true;
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      headers: CORS_HEADERS,
+      headers: authCorsHeaders(route),
       body: JSON.stringify({
         user: { id: 1, walletAddress: userAddress },
         token: 'mock-jwt-token-abcdef123456',
@@ -403,7 +409,7 @@ export async function setupE2EMocks(page: Page, options: SetupE2EOptions = {}) {
   });
 
   // 7. Intercept subscriptions endpoints
-  await page.route('**/api/subscriptions*', async (route: Route) => {
+  await page.route(/\/api\/subscriptions(?:[/?]|$)/, async (route: Route) => {
     const url = route.request().url();
     const method = route.request().method();
 

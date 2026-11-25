@@ -32,9 +32,6 @@ export const metadata: Metadata = {
     template: "%s | SupportMe",
   },
   description: "Support your favorite creators directly with XLM and USDC on Stellar. Zero platform fees and instant bank cashout.",
-  alternates: {
-    canonical: "/",
-  },
   robots: {
     index: true,
     follow: true,

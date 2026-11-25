@@ -79,10 +79,11 @@ This runbook covers the steps for performing a contract upgrade safely.
 
 3. **Set executor on new donation contract** (if using recurring donations)
    ```bash
-   soroban contract invoke \
+   stellar contract invoke \
      --id <new-donation-contract-id> \
-     --source <admin-key> \
+     --source-account <admin-key> \
      --network testnet \
+     -- \
      set_executor \
      --executor <executor-address>
    ```
