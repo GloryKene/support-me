@@ -1,4 +1,4 @@
-import { randomBytes } from "crypto";
+import { createHash, randomBytes, timingSafeEqual } from "crypto";
 import prisma from "../prisma";
 import { generateToken } from "../middleware/auth";
 import { BadRequestError, ServiceUnavailableError, UnauthorizedError } from "../errors/AppError";
@@ -11,11 +11,12 @@ import {
   type TwitterProfile,
 } from "./twitterOAuth";
 
-const STATE_TTL_MS = 10 * 60 * 1000;
+export const TWITTER_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const PROVIDER = "twitter";
 
 interface PendingState {
   codeVerifier: string;
+  bindingHash: string;
   expiresAt: number;
 }
 
@@ -32,8 +33,8 @@ function pruneExpiredStates(): void {
   }
 }
 
-/** Starts the flow: returns the URL the frontend should redirect the user to. */
-export function startTwitterAuth(): string {
+/** Starts the flow and returns the redirect URL plus the browser-binding nonce. */
+export function startTwitterAuth(): { redirectUrl: string; bindingNonce: string } {
   const config = getTwitterOAuthConfig();
   if (!config) {
     throw new ServiceUnavailableError("Twitter sign-in is not configured");
@@ -42,10 +43,15 @@ export function startTwitterAuth(): string {
   pruneExpiredStates();
 
   const state = randomBytes(16).toString("hex");
+  const bindingNonce = randomBytes(32).toString("hex");
   const { verifier, challenge } = generatePkcePair();
-  pendingStates.set(state, { codeVerifier: verifier, expiresAt: Date.now() + STATE_TTL_MS });
+  pendingStates.set(state, {
+    codeVerifier: verifier,
+    bindingHash: createHash("sha256").update(bindingNonce).digest("hex"),
+    expiresAt: Date.now() + TWITTER_OAUTH_STATE_TTL_MS,
+  });
 
-  return buildAuthorizeUrl(config, state, challenge);
+  return { redirectUrl: buildAuthorizeUrl(config, state, challenge), bindingNonce };
 }
 
 export interface TwitterAuthSession {
@@ -62,7 +68,11 @@ export interface TwitterAuthSession {
  * expose, since Twitter's OAuth 2.0 API doesn't return a verified email
  * without an additional, separately-gated scope this app doesn't request.
  */
-export async function completeTwitterAuth(code: string, state: string): Promise<TwitterAuthSession> {
+export async function completeTwitterAuth(
+  code: string,
+  state: string,
+  bindingNonce: string | undefined
+): Promise<TwitterAuthSession> {
   const config = getTwitterOAuthConfig();
   if (!config) {
     throw new ServiceUnavailableError("Twitter sign-in is not configured");
@@ -73,7 +83,15 @@ export async function completeTwitterAuth(code: string, state: string): Promise<
 
   pruneExpiredStates();
   const pending = pendingStates.get(state);
-  if (!pending) {
+  if (!pending || !bindingNonce) {
+    throw new UnauthorizedError("Invalid or expired OAuth state, please try again");
+  }
+  const providedHash = createHash("sha256").update(bindingNonce).digest();
+  const expectedHash = Buffer.from(pending.bindingHash, "hex");
+  if (
+    providedHash.length !== expectedHash.length ||
+    !timingSafeEqual(providedHash, expectedHash)
+  ) {
     throw new UnauthorizedError("Invalid or expired OAuth state, please try again");
   }
   pendingStates.delete(state); // single-use, like the wallet challenge

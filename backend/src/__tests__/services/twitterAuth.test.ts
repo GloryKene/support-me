@@ -39,6 +39,16 @@ const CONFIG = {
   redirectUri: "https://supportme.app/callback",
 };
 
+function startFlow() {
+  const flow = startTwitterAuth();
+  const authorizeUrl = new URL(flow.redirectUrl);
+  return {
+    ...flow,
+    authorizeUrl,
+    state: authorizeUrl.searchParams.get("state")!,
+  };
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockedGetConfig.mockReturnValue(CONFIG);
@@ -56,15 +66,15 @@ describe("startTwitterAuth (#14)", () => {
   });
 
   it("returns a twitter.com authorize URL with a state param when configured", () => {
-    const url = new URL(startTwitterAuth());
+    const { authorizeUrl: url } = startFlow();
     expect(url.hostname).toBe("twitter.com");
     expect(url.searchParams.get("state")).toBeTruthy();
     expect(url.searchParams.get("code_challenge")).toBeTruthy();
   });
 
   it("generates a different state on every call", () => {
-    const first = new URL(startTwitterAuth()).searchParams.get("state");
-    const second = new URL(startTwitterAuth()).searchParams.get("state");
+    const first = startFlow().state;
+    const second = startFlow().state;
     expect(first).not.toBe(second);
   });
 });
@@ -72,24 +82,43 @@ describe("startTwitterAuth (#14)", () => {
 describe("completeTwitterAuth (#14)", () => {
   it("throws a 503 when Twitter OAuth is not configured", async () => {
     mockedGetConfig.mockReturnValue(null);
-    await expect(completeTwitterAuth("code", "state")).rejects.toMatchObject({ statusCode: 503 });
+    await expect(completeTwitterAuth("code", "state", undefined)).rejects.toMatchObject({ statusCode: 503 });
   });
 
   it("rejects a missing code or state before touching the provider", async () => {
-    await expect(completeTwitterAuth("", "state")).rejects.toMatchObject({ statusCode: 400 });
+    await expect(completeTwitterAuth("", "state", undefined)).rejects.toMatchObject({ statusCode: 400 });
     expect(mockedExchange).not.toHaveBeenCalled();
   });
 
   it("rejects a state that was never issued (or already used)", async () => {
-    await expect(completeTwitterAuth("code", "never-issued-state")).rejects.toMatchObject({
+    await expect(completeTwitterAuth("code", "never-issued-state", "nonce")).rejects.toMatchObject({
       statusCode: 401,
     });
     expect(mockedExchange).not.toHaveBeenCalled();
   });
 
+  it("rejects callbacks without the browser-binding nonce or with a mismatched nonce", async () => {
+    const { state, bindingNonce } = startFlow();
+
+    await expect(completeTwitterAuth("code", state, undefined)).rejects.toMatchObject({
+      statusCode: 401,
+    });
+    await expect(completeTwitterAuth("code", state, "different-browser")).rejects.toMatchObject({
+      statusCode: 401,
+    });
+    expect(mockedExchange).not.toHaveBeenCalled();
+
+    mockedExchange.mockResolvedValue({ accessToken: "at" });
+    mockedFetchProfile.mockResolvedValue({ id: "1", username: "alice", name: "Alice" });
+    mockedPrisma.oAuthIdentity.findUnique.mockResolvedValue(null);
+    mockedPrisma.user.create.mockResolvedValue({ id: 1, walletAddress: null, email: null });
+    mockedPrisma.oAuthIdentity.create.mockResolvedValue({});
+    mockedPrisma.creator.findUnique.mockResolvedValue(null);
+    await completeTwitterAuth("code", state, bindingNonce);
+  });
+
   it("rejects the same state used twice (single-use, mirroring the wallet challenge)", async () => {
-    const authorizeUrl = new URL(startTwitterAuth());
-    const state = authorizeUrl.searchParams.get("state")!;
+    const { state, bindingNonce } = startFlow();
 
     mockedExchange.mockResolvedValue({ accessToken: "at" });
     mockedFetchProfile.mockResolvedValue({ id: "1", username: "alice", name: "Alice" });
@@ -98,13 +127,12 @@ describe("completeTwitterAuth (#14)", () => {
     mockedPrisma.oAuthIdentity.create.mockResolvedValue({});
     mockedPrisma.creator.findUnique.mockResolvedValue(null);
 
-    await completeTwitterAuth("code", state);
-    await expect(completeTwitterAuth("code", state)).rejects.toMatchObject({ statusCode: 401 });
+    await completeTwitterAuth("code", state, bindingNonce);
+    await expect(completeTwitterAuth("code", state, bindingNonce)).rejects.toMatchObject({ statusCode: 401 });
   });
 
   it("creates a new account and links the Twitter identity for a first-time sign-in", async () => {
-    const authorizeUrl = new URL(startTwitterAuth());
-    const state = authorizeUrl.searchParams.get("state")!;
+    const { state, bindingNonce } = startFlow();
 
     mockedExchange.mockResolvedValue({ accessToken: "at-1", refreshToken: "rt-1" });
     mockedFetchProfile.mockResolvedValue({ id: "twitter-id-1", username: "alice", name: "Alice" });
@@ -113,7 +141,7 @@ describe("completeTwitterAuth (#14)", () => {
     mockedPrisma.oAuthIdentity.create.mockResolvedValue({});
     mockedPrisma.creator.findUnique.mockResolvedValue(null);
 
-    const session = await completeTwitterAuth("auth-code", state);
+    const session = await completeTwitterAuth("auth-code", state, bindingNonce);
 
     expect(mockedPrisma.user.create).toHaveBeenCalledWith({ data: {} });
     expect(mockedPrisma.oAuthIdentity.create).toHaveBeenCalledWith({
@@ -129,8 +157,7 @@ describe("completeTwitterAuth (#14)", () => {
   });
 
   it("matches a returning user by (provider, providerAccountId) without storing tokens (#367)", async () => {
-    const authorizeUrl = new URL(startTwitterAuth());
-    const state = authorizeUrl.searchParams.get("state")!;
+    const { state, bindingNonce } = startFlow();
 
     mockedExchange.mockResolvedValue({ accessToken: "new-at" });
     mockedFetchProfile.mockResolvedValue({ id: "twitter-id-2", username: "bob", name: "Bob" });
@@ -144,7 +171,7 @@ describe("completeTwitterAuth (#14)", () => {
     mockedPrisma.oAuthIdentity.update.mockResolvedValue({});
     mockedPrisma.creator.findUnique.mockResolvedValue({ id: 1, username: "bob" });
 
-    const session = await completeTwitterAuth("auth-code", state);
+    const session = await completeTwitterAuth("auth-code", state, bindingNonce);
 
     expect(mockedPrisma.user.create).not.toHaveBeenCalled();
     expect(mockedPrisma.oAuthIdentity.update).toHaveBeenCalledWith({
@@ -157,8 +184,7 @@ describe("completeTwitterAuth (#14)", () => {
   });
 
   it("never persists accessToken or refreshToken in OAuthIdentity rows (#367)", async () => {
-    const authorizeUrl = new URL(startTwitterAuth());
-    const state = authorizeUrl.searchParams.get("state")!;
+    const { state, bindingNonce } = startFlow();
 
     mockedExchange.mockResolvedValue({ accessToken: "secret-token", refreshToken: "secret-refresh" });
     mockedFetchProfile.mockResolvedValue({ id: "safe-twitter-id", username: "safe", name: "Safe" });
@@ -167,7 +193,7 @@ describe("completeTwitterAuth (#14)", () => {
     mockedPrisma.oAuthIdentity.create.mockResolvedValue({});
     mockedPrisma.creator.findUnique.mockResolvedValue(null);
 
-    await completeTwitterAuth("code", state);
+    await completeTwitterAuth("code", state, bindingNonce);
 
     const createCall = mockedPrisma.oAuthIdentity.create.mock.calls[0][0];
     expect(createCall.data).not.toHaveProperty("accessToken");
@@ -175,8 +201,7 @@ describe("completeTwitterAuth (#14)", () => {
   });
 
   it("refuses to sign in a returning user whose account has been soft-deleted (#270)", async () => {
-    const authorizeUrl = new URL(startTwitterAuth());
-    const state = authorizeUrl.searchParams.get("state")!;
+    const { state, bindingNonce } = startFlow();
 
     mockedExchange.mockResolvedValue({ accessToken: "new-at" });
     mockedFetchProfile.mockResolvedValue({ id: "twitter-id-3", username: "deleted", name: "Deleted" });
@@ -190,13 +215,12 @@ describe("completeTwitterAuth (#14)", () => {
       user: { id: 8, walletAddress: null, email: null, deletedAt: new Date() },
     });
 
-    await expect(completeTwitterAuth("auth-code", state)).rejects.toMatchObject({ statusCode: 401 });
+    await expect(completeTwitterAuth("auth-code", state, bindingNonce)).rejects.toMatchObject({ statusCode: 401 });
     expect(mockedPrisma.oAuthIdentity.update).not.toHaveBeenCalled();
   });
 
   it("looks up the OAuth identity by the exact (provider, providerAccountId) compound key", async () => {
-    const authorizeUrl = new URL(startTwitterAuth());
-    const state = authorizeUrl.searchParams.get("state")!;
+    const { state, bindingNonce } = startFlow();
 
     mockedExchange.mockResolvedValue({ accessToken: "at" });
     mockedFetchProfile.mockResolvedValue({ id: "abc123", username: "carol", name: "Carol" });
@@ -205,7 +229,7 @@ describe("completeTwitterAuth (#14)", () => {
     mockedPrisma.oAuthIdentity.create.mockResolvedValue({});
     mockedPrisma.creator.findUnique.mockResolvedValue(null);
 
-    await completeTwitterAuth("code", state);
+    await completeTwitterAuth("code", state, bindingNonce);
 
     expect(mockedPrisma.oAuthIdentity.findUnique).toHaveBeenCalledWith({
       where: { provider_providerAccountId: { provider: "twitter", providerAccountId: "abc123" } },
