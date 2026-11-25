@@ -19,6 +19,7 @@ import { RateLimiter } from "../services/rateLimiter";
 import { clientIp, rateLimit } from "../middleware/rateLimit";
 import { getRateLimitConfig } from "../config";
 import { hashDonationRequest } from "../lib/idempotency";
+import { assertCreatorAcceptsCurrency } from "../services/creatorCurrency";
 
 const router = Router();
 const rateLimits = getRateLimitConfig();
@@ -154,6 +155,7 @@ router.post(
 
       const creator = await client.creator.findUnique({ where: { username: creatorUsername } });
       if (!creator) throw new NotFoundError("Creator not found");
+      assertCreatorAcceptsCurrency(creator, currency);
 
       const donation = await client.donation.upsert({
         where: {
@@ -175,6 +177,7 @@ router.post(
           operationIndex,
           eventIndex,
           verified,
+          currencyAccepted: true,
         },
       });
       await client.donationIdempotencyKey.create({

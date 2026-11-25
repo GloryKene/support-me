@@ -13,6 +13,7 @@ import {
 import { computePeriodEnd, formatGoalAmounts, goalMeetsTarget } from "../services/goalService";
 import { notifyGoalsReached } from "../services/donationNotifications";
 import { BadRequestError, ForbiddenError, NotFoundError, UnauthorizedError } from "../errors/AppError";
+import { assertCreatorAcceptsCurrency } from "../services/creatorCurrency";
 
 const router = Router();
 
@@ -59,6 +60,7 @@ router.post(
     if (creator.userId !== req.user.id) {
       throw new ForbiddenError("You can only create goals on your own profile");
     }
+    assertCreatorAcceptsCurrency(creator, currency);
 
     const goal = await prisma.goal.create({
       data: {

@@ -21,7 +21,7 @@ import {
 } from "./eventBus";
 import { applyDonationToGoals } from "./goalService";
 import { notifyDonationConfirmation, notifyDonationReceived, notifyGoalsReached } from "./donationNotifications";
-import { resolveTokenCurrency } from "../lib/stellarAssets";
+import { isCurrencyAccepted, resolveTokenCurrency } from "../lib/stellarAssets";
 
 // On-chain amounts are integer stroops (1 unit = 1e7 stroops); Donation.amount
 // is stored as a decimal in whole asset units, so divide before persisting.
@@ -478,7 +478,12 @@ export class SorobanEventListener {
     // findFirst across any creator sharing the wallet address.
     const creator = await prisma.creator.findFirst({
       where: { walletAddress: creatorAddress },
-      select: { id: true },
+      select: {
+        id: true,
+        acceptsXlm: true,
+        acceptsUsdc: true,
+        acceptsUsdt: true,
+      },
     });
     if (!creator) {
       console.warn(
@@ -501,7 +506,11 @@ export class SorobanEventListener {
 
         if (existing?.verified) {
           // Already reconciled (a replayed lookback, or the listener won a race
-          // with itself) — nothing to apply.
+          // with itself). Refresh the acceptance marker without reapplying goals.
+          await tx.donation.updateMany({
+            where: { id: existing.id, verified: true },
+            data: { currencyAccepted: isCurrencyAccepted(creator, onChain.currency) },
+          });
           return null;
         }
 
@@ -517,6 +526,7 @@ export class SorobanEventListener {
               rpcEventId: evt.id,
               amount,
               currency: onChain.currency,
+              currencyAccepted: isCurrencyAccepted(creator, onChain.currency),
               senderAddress: donorAddress,
               creatorId: creator.id,
             },
@@ -530,6 +540,7 @@ export class SorobanEventListener {
               senderAddress: donorAddress,
               amount,
               currency: onChain.currency,
+              currencyAccepted: isCurrencyAccepted(creator, onChain.currency),
               message: onChain.memo || null,
               transactionHash: evt.txHash,
               onChainEventId: `${evt.txHash}:0:0`,

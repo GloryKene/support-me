@@ -150,6 +150,9 @@ model Donation {
   // Client-reported rows are provisional until the Soroban listener verifies
   // the corresponding event; legacy rows remain visible by default.
   verified        Boolean                 @default(true)
+  // Chain-authoritative donations are retained even if the creator has opted
+  // out of their asset; this records whether the asset was accepted at reconcile time.
+  currencyAccepted Boolean                @default(true)
   createdAt       DateTime                @default(now())
   idempotencyKey  DonationIdempotencyKey?
 
