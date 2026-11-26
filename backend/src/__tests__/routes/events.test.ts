@@ -11,6 +11,12 @@ import request from "supertest";
 import app from "../../app";
 import prisma from "../../prisma";
 import { eventBus, DONATION_EVENT, DonationEvent } from "../../services/eventBus";
+import {
+  endActiveEventsStreams,
+  resetEventsConnections,
+  setEventsConnectionLimits,
+} from "../../routes/events";
+import { generateToken } from "../../middleware/auth";
 import { resetEventsConnections, setEventsConnectionLimits } from "../../routes/events";
 import { generateToken, clearDeletedAtCache } from "../../middleware/auth";
 
@@ -30,6 +36,7 @@ function openStream(pathOrQuery = "/api/events", headersMap: Record<string, stri
   let onHeaders: () => void;
   let socket: Socket | undefined;
   let rawBody = "";
+  let ended = false;
   const headersArrived = new Promise<void>((resolve) => {
     onHeaders = resolve;
   });
@@ -53,6 +60,9 @@ function openStream(pathOrQuery = "/api/events", headersMap: Record<string, stri
     res.on("data", (chunk: Buffer) => {
       chunks.push(chunk.toString());
       rawBody += chunk.toString();
+    });
+    res.on("end", () => {
+      ended = true;
     });
     // Tearing the socket down surfaces an ECONNRESET on the raw response.
     // That is the expected consequence of closing an open stream, not a
@@ -79,6 +89,9 @@ function openStream(pathOrQuery = "/api/events", headersMap: Record<string, stri
       } catch {
         return rawBody;
       }
+    },
+    get ended() {
+      return ended;
     },
     close: () => {
       socket?.destroy();
@@ -237,6 +250,15 @@ describe("GET /api/events", () => {
 
     expect(stream.status).toBe(200);
     expect(stream.chunks).toHaveLength(0);
+  });
+
+  it("ends active streams cleanly when shutdown begins", async () => {
+    const stream = await connect();
+
+    endActiveEventsStreams();
+    await delay(50);
+
+    expect(stream.ended).toBe(true);
   });
 
   it("cleans up event listeners on connection close", async () => {

@@ -117,6 +117,7 @@ as well if the listener needs a non-default endpoint.
 | --- | --- | --- |
 | `RESEND_API_KEY` | Optional. | Unset; outbound messages are logged instead of sent. |
 | `EMAIL_FROM` | Optional. | `SupportMe <notifications@supportme.app>`. Use a sender verified with Resend in deployed environments. |
+| `EMAIL_SEND_TIMEOUT_MS` | Optional. | `10000`. Upper bound on a single Resend HTTP call; a call that exceeds it is aborted and recorded as a `FAILED` EmailEvent, so a hung provider cannot hold a request open. Must be a positive integer. |
 | `APP_URL` | Optional locally; set to the canonical public frontend URL in staging and production. | Context-dependent: some email/SEO paths fall back to `https://supportme.app`, while magic-link, notification and preview paths fall back to `https://localhost:3000` (the frontend's local HTTPS dev origin). Set it explicitly outside local development so generated links point to the right environment. |
 | `RESEND_WEBHOOK_SECRET` | Optional for the app; required to accept Resend webhook requests. | Unset; webhook requests are rejected when no signing secret is configured. |
 | `NEXT_PUBLIC_STELLAR_NETWORK` | Optional. | `TESTNET`; used to select the network label/link in email templates and as a fallback for the backend's `STELLAR_NETWORK`. |

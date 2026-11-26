@@ -4,6 +4,7 @@ import { Webhook } from "standardwebhooks";
 import prisma from "../prisma";
 import { asyncHandler } from "../middleware/asyncHandler";
 import { log } from "../lib/logger";
+import { normalizeRecipient } from "../services/email/mailer";
 import { BadRequestError } from "../errors/AppError";
 
 const router = Router();
@@ -29,7 +30,11 @@ function getWebhookSecret(): string {
 
 interface ResendWebhookPayload {
   type: "email.sent" | "email.delivered" | "email.bounced" | "email.complained" | string;
-  data: {
+  // Optional because a signature-valid payload is not guaranteed to carry
+  // `data`: reading through it unguarded turned a missing object into a
+  // TypeError, a 500, and a provider retry for a payload we could never
+  // process anyway (#534).
+  data?: {
     email_id?: string;
     to?: string[];
     subject?: string;
@@ -70,9 +75,9 @@ router.post(
       throw new BadRequestError("Invalid webhook signature");
     }
 
-    const recipient = event.data.to?.[0];
-    if (!recipient) {
-      log("warn", "email webhook missing recipient", { type: event.type });
+    const data = event.data;
+    if (!data || typeof data !== "object") {
+      log("warn", "email webhook missing data object", { type: event.type });
       return res.status(200).json({ received: true });
     }
 
@@ -107,12 +112,14 @@ router.post(
     }
 
     if (type === "BOUNCED" || type === "COMPLAINED") {
-      log("warn", "email delivery failure reported by provider", {
-        to: recipient,
-        type,
-        providerMessageId: event.data.email_id,
-        error: event.data.bounce?.message,
-      });
+      for (const recipient of recipients) {
+        log("warn", "email delivery failure reported by provider", {
+          to: recipient,
+          type,
+          providerMessageId: data.email_id,
+          error: data.bounce?.message,
+        });
+      }
     }
 
     return res.status(200).json({ received: true });

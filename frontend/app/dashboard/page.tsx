@@ -139,32 +139,53 @@ export default function DashboardPage() {
   }, [fetchData]);
   
   const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState<number | null>(null);
+  const exportAbortRef = useRef<AbortController | null>(null);
 
   // Exports the creator's full donation history (not just the pages loaded on
   // screen) by walking every page of the API, then downloads it as a CSV.
+  // Capped at 200 pages x 100 rows (the latest 20,000 donations); the user is
+  // warned when the cap truncates the export.
   const exportDonationsCsv = async () => {
     if (!creator || exporting) return;
     setExporting(true);
+    const controller = new AbortController();
+    exportAbortRef.current = controller;
+    setExportProgress(0);
     try {
       const all: Donation[] = [];
       const pageSize = 100;
       const maxPages = 200;
+      let truncated = false;
       for (let page = 1; page <= maxPages; page++) {
         const response = await fetch(
           `${API_URL}/api/donations?creatorUsername=${encodeURIComponent(creator.username)}&page=${page}&limit=${pageSize}`,
-          { credentials: 'include', headers: token ? { Authorization: `Bearer ${token}` } : {} }
+          {
+            credentials: 'include',
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+            signal: controller.signal,
+          }
         );
         if (!response.ok) throw new Error('The server returned an error. Please try again.');
         const data = await response.json();
         all.push(...((Array.isArray(data) ? data : data.items) || []));
+        setExportProgress(page);
         if (Array.isArray(data) || !data.pagination || page >= data.pagination.totalPages) break;
+        if (page === maxPages) truncated = true;
       }
       downloadCsv(donationsCsvFilename(creator.username), donationsToCsv(all));
-      notify.success(`Exported ${all.length} donation${all.length === 1 ? '' : 's'}`);
+      if (truncated) {
+        notify.error('Export truncated', `Exported the latest 20,000 donations (${all.length} rows). Older donations were not included.`);
+      } else {
+        notify.success(`Exported ${all.length} donation${all.length === 1 ? '' : 's'}`);
+      }
     } catch (err) {
+      if ((err as Error).name === 'AbortError') return;
       notify.error('Could not export donations', err);
     } finally {
+      exportAbortRef.current = null;
       setExporting(false);
+      setExportProgress(null);
     }
   };
 
@@ -540,7 +561,7 @@ export default function DashboardPage() {
                           +{donation.amount} {donation.currency}
                         </span>
                         {usd && (
-                          <span className="text-xs text-muted whitespace-nowrap-tabular-nums">{usd}</span>
+                          <span className="text-xs text-muted whitespace-nowrap tabular-nums">{usd}</span>
                         )}
                         <span className="text-xs text-muted font-mono whitespace-nowrap">
                           {donation.senderAddress.slice(0, 6)}…{donation.senderAddress.slice(-4)}
@@ -617,6 +638,7 @@ export default function DashboardPage() {
                           target="_blank"
                           rel="noopener noreferrer"
                           title="View transaction on Stellar Expert"
+                          className="block -mx-2 px-2 rounded hover:bg-accent-bg focus:bg-accent-bg focus-visible:outline-[3px] focus-visible:outline-focus-ring focus-visible:outline-offset-2 transition-colors"
                         >
                           {row}
                         </a>
