@@ -86,6 +86,40 @@ describe("GET /api/goals/:username", () => {
 describe("POST /api/goals/:username", () => {
   const token = generateToken(1, "GUSERADDRESS");
 
+  it.each([
+    ["XLM", { acceptsXlm: false, acceptsUsdc: true, acceptsUsdt: true }, "USDC, USDT"],
+    ["USDC", { acceptsXlm: true, acceptsUsdc: false, acceptsUsdt: true }, "XLM, USDT"],
+    ["USDT", { acceptsXlm: true, acceptsUsdc: true, acceptsUsdt: false }, "XLM, USDC"],
+  ])("rejects %s when the creator has disabled it", async (currency, preferences, allowed) => {
+    mockedPrisma.creator.findUnique.mockResolvedValue({
+      id: 7,
+      userId: 1,
+      username: "bob",
+      ...preferences,
+    });
+
+    const res = await request(app)
+      .post("/api/goals/bob")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ targetAmount: 100, currency });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("BAD_REQUEST");
+    expect(res.body.error).toContain(`Allowed currencies: ${allowed}`);
+    expect(mockedPrisma.goal.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown currency code", async () => {
+    const res = await request(app)
+      .post("/api/goals/bob")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ targetAmount: 100, currency: "DOGE" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("VALIDATION_ERROR");
+    expect(mockedPrisma.creator.findUnique).not.toHaveBeenCalled();
+  });
+
   it("rejects requests without an auth token", async () => {
     const res = await request(app).post("/api/goals/bob").send({ targetAmount: 100 });
     expect(res.status).toBe(401);
@@ -186,7 +220,12 @@ describe("POST /api/goals/:username", () => {
   });
 
   it("creates a goal denominated in USDT (issue #18)", async () => {
-    mockedPrisma.creator.findUnique.mockResolvedValue({ id: 7, userId: 1, username: "bob" });
+    mockedPrisma.creator.findUnique.mockResolvedValue({
+      id: 7,
+      userId: 1,
+      username: "bob",
+      acceptsUsdt: true,
+    });
     const created = { id: 3, creatorId: 7, title: "Server costs", targetAmount: 300, currency: "USDT" };
     mockedPrisma.goal.create.mockResolvedValue(created);
 

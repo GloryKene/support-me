@@ -38,6 +38,11 @@ eventBus.setMaxListeners(Math.max(100, (maxGlobalConnections + 10) * 5));
 
 let activeGlobalConnections = 0;
 const activeIpConnections = new Map<string, number>();
+const activeEventStreamClosers = new Set<() => void>();
+
+export function endActiveEventsStreams(): void {
+  for (const close of [...activeEventStreamClosers]) close();
+}
 
 export function getActiveEventsConnectionCounts() {
   return {
@@ -184,9 +189,11 @@ router.get(
     eventBus.off(SUBSCRIPTION_CANCELLED_EVENT, onSubCancelled);
     eventBus.off(GOAL_UPDATED_EVENT, onGoalUpdated);
     eventBus.off(DONATION_RECORDED_EVENT, onDonationRecorded);
+    activeEventStreamClosers.delete(cleanup);
     res.end();
   };
 
+  activeEventStreamClosers.add(cleanup);
   req.on("close", cleanup);
   res.on("close", cleanup);
 }));
