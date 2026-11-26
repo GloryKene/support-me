@@ -79,6 +79,70 @@ describe("POST /api/webhooks/email/resend", () => {
     });
   });
 
+  it("records one BOUNCED event per recipient of a multi-recipient message (#534)", async () => {
+    const res = await postWebhook({
+      type: "email.bounced",
+      data: {
+        email_id: "resend-multi",
+        to: ["first@example.com", "Second@Example.com"],
+        subject: "Your subscription renewed",
+        bounce: { message: "mailbox does not exist" },
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockedPrisma.emailEvent.create).toHaveBeenCalledTimes(2);
+    expect(mockedPrisma.emailEvent.create).toHaveBeenNthCalledWith(1, {
+      data: {
+        recipient: "first@example.com",
+        subject: "Your subscription renewed",
+        type: "BOUNCED",
+        providerMessageId: "resend-multi",
+        errorDetail: "mailbox does not exist",
+      },
+    });
+    expect(mockedPrisma.emailEvent.create).toHaveBeenNthCalledWith(2, {
+      data: {
+        recipient: "second@example.com",
+        subject: "Your subscription renewed",
+        type: "BOUNCED",
+        providerMessageId: "resend-multi",
+        errorDetail: "mailbox does not exist",
+      },
+    });
+  });
+
+  it("normalizes a mixed-case recipient to lowercase before storing it (#534)", async () => {
+    const res = await postWebhook({
+      type: "email.bounced",
+      data: {
+        email_id: "resend-case",
+        to: ["Bob@X.com"],
+        subject: "Receipt",
+        bounce: { message: "mailbox does not exist" },
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockedPrisma.emailEvent.create).toHaveBeenCalledWith({
+      data: {
+        recipient: "bob@x.com",
+        subject: "Receipt",
+        type: "BOUNCED",
+        providerMessageId: "resend-case",
+        errorDetail: "mailbox does not exist",
+      },
+    });
+  });
+
+  it("acknowledges a verified payload with no data object instead of throwing (#534)", async () => {
+    const res = await postWebhook({ type: "email.bounced" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ received: true });
+    expect(mockedPrisma.emailEvent.create).not.toHaveBeenCalled();
+  });
+
   it("records a DELIVERED event for a validly signed email.delivered payload", async () => {
     const res = await postWebhook({
       type: "email.delivered",
